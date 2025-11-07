@@ -261,6 +261,52 @@ namespace ESMSharp.TES3Terrain
             byte[] hbytes = heightTexture.EncodeToPNG(); // or texture2D.EncodeToJPG(quality)
             string hfilePath = Application.dataPath + "/StreamingAssets/Data/MapHeight.png"; // Or any desired path
             System.IO.File.WriteAllBytes(hfilePath, hbytes);
+            
+            // Export RAW file for Unity terrain (16-bit grayscale, little-endian)
+            if (foundValidHeight)
+            {
+                // Calculate height range for normalization
+                float globalHeightRange = globalMaxHeight - globalMinHeight;
+                if (globalHeightRange < 0.001f) globalHeightRange = 1f; // Avoid division by zero
+                
+                // RAW format: 16-bit unsigned short (ushort) per pixel, little-endian
+                // No header, just raw pixel data
+                byte[] rawBytes = new byte[width * height * 2]; // 2 bytes per pixel (16-bit)
+                int byteIndex = 0;
+                
+                for (int y = 0; y < height; y++)
+                {
+                    for (int x = 0; x < width; x++)
+                    {
+                        if (globalHeightsCount[y][x] > 0)
+                        {
+                            // Use raw height value (before normalization/contrast curve)
+                            float h = globalHeights[y][x];
+                            // Normalize to 0-1 range
+                            float normalizedHeight = (h - globalMinHeight) / globalHeightRange;
+                            normalizedHeight = Mathf.Clamp01(normalizedHeight);
+                            
+                            // Convert to 16-bit (0-65535)
+                            ushort heightValue = (ushort)(normalizedHeight * 65535.0f);
+                            
+                            // Write as little-endian (LSB first, then MSB)
+                            rawBytes[byteIndex++] = (byte)(heightValue & 0xFF);        // LSB
+                            rawBytes[byteIndex++] = (byte)((heightValue >> 8) & 0xFF); // MSB
+                        }
+                        else
+                        {
+                            // Unwritten pixels (missing cells): write 0 (sea level / black)
+                            // This fills transparent areas with sea level to avoid cliffs in Unity terrain
+                            rawBytes[byteIndex++] = 0;
+                            rawBytes[byteIndex++] = 0;
+                        }
+                    }
+                }
+                
+                string rawFilePath = Application.dataPath + "/StreamingAssets/Data/MapHeight.raw";
+                System.IO.File.WriteAllBytes(rawFilePath, rawBytes);
+                UnityEngine.Debug.Log($"Exported RAW heightmap to: {rawFilePath} (Size: {width}x{height}, 16-bit)");
+            }
 
             // Export cell offsets as solid colors (for visualization)
             Texture2D offsetTexture = new Texture2D(width, height, TextureFormat.RGBA32, false);
@@ -676,59 +722,61 @@ namespace ESMSharp.TES3Terrain
                 absoluteHeights[i] = new float[CELL];
             }
             
-            // Start with offset (height at position 0,0)
-            int heightInt = (int)offset;
+            // Reconstruct absolute heights from deltas and offset
+            // According to TES3 wiki: deltas are differences between adjacent pixels
+            // Each pixel's height = previous pixel's height + delta
+            // The "previous pixel" follows scan order: left-to-right within each row, top-to-bottom across rows
+            // Row reset: at end of each row, reset to that row's first column (which accumulated first-column deltas)
+            // This matches Rust implementation: height = grid_height.get(Index2D::new(0, y)) at end of each row
+            
+            // Use integer arithmetic first (matching Rust implementation), then convert to float
+            // Rust uses i32 for offset and i8 for deltas, accumulating as i32
+            int heightInt = (int)offset; // Start with offset (height at position 0,0)
             
             for (int y = 0; y < CELL; y++)
             {
-                // Check if we need to align with neighbors at the start of this row (x=0)
-                bool useNeighbor = false;
-                
-                // For first row (y=0), check bottom neighbor first
+                // At start of each row, check if we should align with neighbors
+                // This fixes the mosaic effect by ensuring cells align at boundaries
                 if (y == 0 && cellY > minCellY && cellHeights.ContainsKey((cellX, cellY - 1)))
                 {
-                    // Use bottom neighbor's top edge height at x=0
+                    // Align with bottom neighbor's top edge, but use row 62 instead of 64 to avoid edge artifacts
+                    // The outermost rows (64, 63) might have artifacts, so use two pixels in
                     float[][] bottomCell = cellHeights[(cellX, cellY - 1)];
-                    // Bottom neighbor's top edge is at y=64 (last row), x=0
-                    float bottomNeighborHeight = bottomCell[64][0] / HEIGHT_MAP_SCALE_FACTOR; // Unscale
-                    heightInt = (int)bottomNeighborHeight;
-                    useNeighbor = true;
+                    float neighborHeight = bottomCell[62][0]; // Use row 62 instead of 64 to avoid edge artifacts
+                    heightInt = (int)Math.Round(neighborHeight / HEIGHT_MAP_SCALE_FACTOR);
                 }
-                // For any row, check left neighbor (takes precedence over standard reset for y>0)
                 else if (cellX > minCellX && cellHeights.ContainsKey((cellX - 1, cellY)))
                 {
-                    // Use left neighbor's right edge height at this Y position
+                    // Align with left neighbor, but use column 63 instead of 64 to avoid edge artifacts
+                    // The outermost column (64) might have artifacts that propagate, so use one pixel in
                     float[][] leftCell = cellHeights[(cellX - 1, cellY)];
-                    // Left neighbor's right edge is at x=64 (last column)
-                    float leftNeighborHeight = leftCell[y][64] / HEIGHT_MAP_SCALE_FACTOR; // Unscale
-                    heightInt = (int)leftNeighborHeight;
-                    useNeighbor = true;
+                    float neighborHeight = leftCell[y][63]; // Use column 63 instead of 64 to avoid edge artifacts
+                    heightInt = (int)Math.Round(neighborHeight / HEIGHT_MAP_SCALE_FACTOR);
                 }
-                
-                // Standard row reset if no neighbors
-                if (!useNeighbor)
+                else if (y > 0)
                 {
-                    if (y == 0)
-                    {
-                        // First row, first column: use offset
-                        heightInt = (int)offset;
-                    }
-                    else
-                    {
-                        // Reset to first column's height of previous row (standard row reset)
-                        heightInt = (int)(absoluteHeights[y - 1][0] / HEIGHT_MAP_SCALE_FACTOR);
-                    }
+                    // Standard row reset: use first column's height of previous row
+                    // Use the unscaled integer value directly to avoid precision loss
+                    // absoluteHeights[y-1][0] is already scaled, so we need to unscale it
+                    // But we stored it as scaled float, so we need to convert back
+                    // Actually, we can't avoid this conversion since we're storing as float
+                    // But we can be more precise by avoiding rounding
+                    float prevRowFirstHeight = absoluteHeights[y - 1][0];
+                    heightInt = (int)(prevRowFirstHeight / HEIGHT_MAP_SCALE_FACTOR + 0.5f);
                 }
                 
                 // Accumulate across this row
                 for (int x = 0; x < CELL; x++)
                 {
+                    // Deltas are differences: 0 = same as previous, +n = n units higher, -n = n units lower
+                    // Accumulate: height += delta
                     heightInt += deltas[y][x];
                     absoluteHeights[y][x] = heightInt;
                 }
             }
             
-            // Apply scale factor
+            // Apply scale factor after reconstruction (scale everything by 8)
+            // This matches the Rust implementation: scale after accumulating
             for (int y = 0; y < CELL; y++)
             {
                 for (int x = 0; x < CELL; x++)
@@ -773,7 +821,8 @@ namespace ESMSharp.TES3Terrain
                     int px = startX + lx;
                     if ((uint)px >= (uint)W) continue;
                     
-                    // Use first-write-wins
+                    // For overlapping boundaries (especially bottom/top edges), average the heights
+                    // This should fix the darker bottom row issue where cells overlap at boundaries
                     if (globalHeightsCount[py][px] == 0)
                     {
                         globalHeights[py][px] = cellHeight[ly][lx];
@@ -781,6 +830,9 @@ namespace ESMSharp.TES3Terrain
                     }
                     else
                     {
+                        // Average overlapping boundary pixels to smooth the transition
+                        // This helps fix the darker bottom row where cells overlap
+                        globalHeights[py][px] = (globalHeights[py][px] * globalHeightsCount[py][px] + cellHeight[ly][lx]) / (globalHeightsCount[py][px] + 1);
                         globalHeightsCount[py][px]++;
                     }
                     
