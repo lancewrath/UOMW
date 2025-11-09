@@ -1,10 +1,48 @@
 using ESMSharp.Core;
 using ESMSharp.TES3.Records;
 using System;
+using Unity.VisualScripting;
 using UnityEngine;
 
 namespace ESMSharp.TES3
 {
+
+    public class SubRecordLandVTEX : SubRecords
+    {
+        private ushort[][] _indices;
+
+        public ushort[][] indices { get { return _indices; } }
+
+        public SubRecordLandVTEX()
+        {
+
+
+
+        }
+        public SubRecordLandVTEX(string type)
+        {
+            _type = type;
+        }
+
+        public override void Deserialize(BetterReader reader, string name)
+        {
+            _type = name;
+
+            _indices = new ushort[16][];
+            for (int yy = 0; yy < 16; yy++)
+            {
+                _indices[yy] = new ushort[16];
+                for (int xx = 0; xx < 16; xx++)
+                {
+                    // Read byte and convert to signed byte properly
+                    // Values 0-127 stay positive, 128-255 become -128 to -1
+                    ushort b = reader.ReadUInt16();
+                    _indices[yy][xx] = b;
+                }
+            }
+
+        }
+    }
 
     public class SubRecordLandINTV : SubRecords
     {

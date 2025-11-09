@@ -7,6 +7,7 @@ namespace UOMW
     {
 
         public string esmFile = "morrowind.esm";
+        public string bsaFile = "morrowind.bsa";
         public TES3Master tesesm;
         // Start is called once before the first execution of Update after the MonoBehaviour is created
         void Start()

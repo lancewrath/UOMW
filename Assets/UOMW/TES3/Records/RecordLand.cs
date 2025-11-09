@@ -12,7 +12,7 @@ namespace ESMSharp.TES3
     {
 
         public long MinCellX = 0, MinCellY = 0, MaxCellX = 0, MaxCellY = 0;
-
+        public float maxheight = 0;
         public override void Deserialize(BetterReader reader, string name)
         {
             type = name;
@@ -33,7 +33,7 @@ namespace ESMSharp.TES3
         protected override void ExtractSubRecords(BetterReader reader, uint size)
         {
             string srecord = reader.ReadString(4);
-            Utils.LogBuffer("\t- SubRecord: {0}", srecord);
+            Utils.LogBuffer("\t- Land SubRecord: {0}", srecord);
             uint subrecordsize = reader.ReadUInt32();
             SubRecords subrecord = null;
 
@@ -70,6 +70,8 @@ namespace ESMSharp.TES3
                 case "VHGT":
                     SubRecordLandVHGT subrecordvght = new SubRecordLandVHGT();
                     subrecordvght.Deserialize(reader, srecord);
+                    if(subrecordvght.offset>maxheight)
+                        maxheight = subrecordvght.offset;
                     subrecord = subrecordvght;
                     break;
 
@@ -84,7 +86,9 @@ namespace ESMSharp.TES3
                     break;
 
                 case "VTEX":
-                    reader.ReadBytes(512);
+                    SubRecordLandVTEX subrecordvtex = new SubRecordLandVTEX();
+                    subrecordvtex.Deserialize(reader, srecord);
+                    subrecord = subrecordvtex;
                     break;
 
                 default:

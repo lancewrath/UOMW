@@ -10,6 +10,9 @@ namespace ESMSharp.TES3.Records
     public class SubRecords
     {
         protected string _type = "NONE";
+
+        public string type { get { return _type; } }
+
         protected uint _unknown = 0;
         public SubRecords() 
         {
