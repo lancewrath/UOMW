@@ -53,7 +53,7 @@ namespace ESMSharp.NIF
                 }
             }
 
-            UnityEngine.Debug.Log($"Found {uniqueModels.Count} unique model files in STAT records");
+            //UnityEngine.Debug.Log($"Found {uniqueModels.Count} unique model files in STAT records");
 
             // Step 2: Open BSA archive
             string bsaPath = System.IO.Path.Combine(Application.dataPath, "StreamingAssets", "Data", _bsa);
@@ -68,7 +68,7 @@ namespace ESMSharp.NIF
             {
                 bsaArchive = new BSA();
                 bsaArchive.Open(bsaPath);
-                UnityEngine.Debug.Log($"Opened BSA archive: {bsaPath}");
+                //UnityEngine.Debug.Log($"Opened BSA archive: {bsaPath}");
             }
             catch (System.Exception ex)
             {
@@ -98,7 +98,7 @@ namespace ESMSharp.NIF
                     if (System.IO.File.Exists(outputPath))
                     {
                         extractedCount++;
-                        UnityEngine.Debug.Log($"Model already cached: {baseFilename} (skipping extraction)");
+                        //UnityEngine.Debug.Log($"Model already cached: {baseFilename} (skipping extraction)");
                         continue;
                     }
 
@@ -151,17 +151,17 @@ namespace ESMSharp.NIF
                             byte[] modelData = bsaArchive.ExtractFile(entry);
                             System.IO.File.WriteAllBytes(outputPath, modelData);
                             extractedCount++;
-                            UnityEngine.Debug.Log($"Extracted model: {foundPath} -> {baseFilename}");
+                            //UnityEngine.Debug.Log($"Extracted model: {foundPath} -> {baseFilename}");
                         }
                         else
                         {
-                            UnityEngine.Debug.LogWarning($"Model entry not found in BSA: {foundPath}");
+                            //UnityEngine.Debug.LogWarning($"Model entry not found in BSA: {foundPath}");
                             failedCount++;
                         }
                     }
                     else
                     {
-                        UnityEngine.Debug.LogWarning($"Model not found in BSA: {modelFilename} (tried {pathVariations.Length} variations)");
+                        //UnityEngine.Debug.LogWarning($"Model not found in BSA: {modelFilename} (tried {pathVariations.Length} variations)");
                         failedCount++;
                     }
                 }
@@ -178,7 +178,7 @@ namespace ESMSharp.NIF
                 bsaArchive.Close();
             }
 
-            UnityEngine.Debug.Log($"Model extraction complete: {extractedCount} extracted, {failedCount} failed");
+            //UnityEngine.Debug.Log($"Model extraction complete: {extractedCount} extracted, {failedCount} failed");
         }
     }
 }

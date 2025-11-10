@@ -59,11 +59,8 @@ namespace ESMSharp.NIF
             if (meshes == null || meshes.Count == 0)
                 return (null, null);
 
-            // Default rotation: -90 degrees around X axis (Morrowind to Unity conversion)
-            if (rotation == default(Quaternion))
-            {
-                rotation = Quaternion.Euler(-90f, 0f, 0f);
-            }
+            // Note: Vertices are already transformed by NiNode transforms and coordinate system conversion in ExtractMeshFromTriShape
+            // We only need to apply vertex scaling here (rotation parameter is kept for backward compatibility but not used)
 
             List<Vector3> combinedVertices = new List<Vector3>();
             List<Vector2> combinedUVs = new List<Vector2>();
@@ -81,7 +78,8 @@ namespace ESMSharp.NIF
                 if (nifMesh.Vertices == null || nifMesh.Vertices.Count == 0)
                     continue;
 
-                // Add vertices with scaling and rotation applied at mesh level
+                // Vertices are already transformed by NiNode transforms and coordinate system conversion
+                // We only need to apply vertex scaling here
                 foreach (Vector3 vertex in nifMesh.Vertices)
                 {
                     Vector3 scaledVertex = new Vector3(
@@ -89,9 +87,7 @@ namespace ESMSharp.NIF
                         vertex.y * vertexScale,
                         vertex.z * vertexScale
                     );
-                    // Apply rotation to vertex
-                    Vector3 rotatedVertex = rotation * scaledVertex;
-                    combinedVertices.Add(rotatedVertex);
+                    combinedVertices.Add(scaledVertex);
                 }
 
                 // Store triangles for this submesh with vertex offset
@@ -122,12 +118,9 @@ namespace ESMSharp.NIF
                 // Add normals with rotation applied (recalculate if missing)
                 if (nifMesh.Normals != null && nifMesh.Normals.Count == nifMesh.Vertices.Count)
                 {
-                    foreach (Vector3 normal in nifMesh.Normals)
-                    {
-                        // Apply rotation to normal
-                        Vector3 rotatedNormal = rotation * normal;
-                        combinedNormals.Add(rotatedNormal);
-                    }
+                    // Normals are already transformed by NiNode transforms and coordinate system conversion
+                    // Just add them directly
+                    combinedNormals.AddRange(nifMesh.Normals);
                 }
                 else
                 {
@@ -276,11 +269,11 @@ namespace ESMSharp.NIF
                 NIFTexture baseTex = textures.ContainsKey("BaseTexture") ? textures["BaseTexture"] : textures["Diffuse"];
                 if (baseTex.Enabled && !string.IsNullOrEmpty(baseTex.FilePath))
                 {
-                    UnityEngine.Debug.Log($"Loading texture for material: {baseTex.FilePath}");
+                    //UnityEngine.Debug.Log($"Loading texture for material: {baseTex.FilePath}");
                     Texture2D diffuseTexture = LoadTextureForModel(baseTex.FilePath, esm);
                     if (diffuseTexture != null)
                     {
-                        UnityEngine.Debug.Log($"Successfully loaded texture: {baseTex.FilePath} ({diffuseTexture.width}x{diffuseTexture.height})");
+                        //UnityEngine.Debug.Log($"Successfully loaded texture: {baseTex.FilePath} ({diffuseTexture.width}x{diffuseTexture.height})");
                         if (material.shader.name.Contains("Universal Render Pipeline"))
                         {
                             material.SetTexture("_BaseMap", diffuseTexture);
@@ -293,17 +286,17 @@ namespace ESMSharp.NIF
                     }
                     else
                     {
-                        UnityEngine.Debug.LogWarning($"Failed to load texture: {baseTex.FilePath}, creating invisible material");
+                        //UnityEngine.Debug.LogWarning($"Failed to load texture: {baseTex.FilePath}, creating invisible material");
                     }
                 }
                 else
                 {
-                    UnityEngine.Debug.LogWarning($"BaseTexture has empty or disabled path. Enabled: {baseTex?.Enabled}, Path: {baseTex?.FilePath}, creating invisible material");
+                    //UnityEngine.Debug.LogWarning($"BaseTexture has empty or disabled path. Enabled: {baseTex?.Enabled}, Path: {baseTex?.FilePath}, creating invisible material");
                 }
             }
             else
             {
-                UnityEngine.Debug.LogWarning($"No BaseTexture or Diffuse texture found in textures dictionary. Available keys: {string.Join(", ", textures.Keys)}, creating invisible material");
+                //UnityEngine.Debug.LogWarning($"No BaseTexture or Diffuse texture found in textures dictionary. Available keys: {string.Join(", ", textures.Keys)}, creating invisible material");
             }
 
             // If no texture was loaded, make the material invisible (for editor-specific meshes)
@@ -424,7 +417,7 @@ namespace ESMSharp.NIF
                 return LoadTextureFromFile(foundTexturePath);
             }
 
-            UnityEngine.Debug.LogWarning($"Texture not found: {texturePath}");
+            //UnityEngine.Debug.LogWarning($"Texture not found: {texturePath}");
             return null;
         }
 
@@ -438,7 +431,7 @@ namespace ESMSharp.NIF
                 string bsaPath = System.IO.Path.Combine(Application.dataPath, "StreamingAssets", "Data", _bsa);
                 if (!File.Exists(bsaPath))
                 {
-                    UnityEngine.Debug.LogWarning($"BSA file not found: {bsaPath}");
+                    //UnityEngine.Debug.LogWarning($"BSA file not found: {bsaPath}");
                     return null;
                 }
 
@@ -497,13 +490,13 @@ namespace ESMSharp.NIF
             HashSet<string> bsaFileNames = new HashSet<string>(_bsaArchive.GetFileNames(), StringComparer.OrdinalIgnoreCase);
             string foundPath = null;
 
-            UnityEngine.Debug.Log($"Searching BSA for texture: {texturePath} (normalized: {normalizedPath}, trying {pathVariationsArray.Length} variations)");
+            //UnityEngine.Debug.Log($"Searching BSA for texture: {texturePath} (normalized: {normalizedPath}, trying {pathVariationsArray.Length} variations)");
             foreach (string pathVar in pathVariationsArray)
             {
                 if (bsaFileNames.Contains(pathVar))
                 {
                     foundPath = pathVar;
-                    UnityEngine.Debug.Log($"Found texture in BSA: {foundPath}");
+                    //UnityEngine.Debug.Log($"Found texture in BSA: {foundPath}");
                     break;
                 }
             }
@@ -537,7 +530,7 @@ namespace ESMSharp.NIF
                         string outputPath = System.IO.Path.Combine(outputDir, outputBaseNameNoExt + System.IO.Path.GetExtension(foundPath).ToLower());
 
                         File.WriteAllBytes(outputPath, textureData);
-                        UnityEngine.Debug.Log($"Extracted texture from BSA: {foundPath} -> {outputPath}");
+                        //UnityEngine.Debug.Log($"Extracted texture from BSA: {foundPath} -> {outputPath}");
 
                         // If it's a DDS, try to convert to PNG
                         if (outputPath.ToLower().EndsWith(".dds"))
@@ -545,7 +538,7 @@ namespace ESMSharp.NIF
                             string pngPath = System.IO.Path.ChangeExtension(outputPath, ".png");
                             if (ConvertDDSToPNG(textureData, pngPath))
                             {
-                                UnityEngine.Debug.Log($"Converted DDS to PNG: {outputPath} -> {pngPath}");
+                                //UnityEngine.Debug.Log($"Converted DDS to PNG: {outputPath} -> {pngPath}");
                                 return pngPath; // Return PNG path instead
                             }
                         }
@@ -562,7 +555,7 @@ namespace ESMSharp.NIF
                                 #if UNITY_EDITOR
                                 SetTextureImportSettings(pngPath);
                                 #endif
-                                UnityEngine.Debug.Log($"Converted TGA to PNG: {outputPath} -> {pngPath}");
+                                //UnityEngine.Debug.Log($"Converted TGA to PNG: {outputPath} -> {pngPath}");
                                 return pngPath; // Return PNG path instead
                             }
                             UnityEngine.Object.DestroyImmediate(tempTexture);
@@ -654,7 +647,7 @@ namespace ESMSharp.NIF
                         return texture2;
                     }
                     #endif
-                    UnityEngine.Debug.LogWarning($"Failed to load DDS texture: {texturePath}");
+                    //UnityEngine.Debug.LogWarning($"Failed to load DDS texture: {texturePath}");
                 }
                 else if (ext == ".tga")
                 {
@@ -753,7 +746,8 @@ namespace ESMSharp.NIF
                 Niflib.NiFile nifFile = new Niflib.NiFile(reader);
                 
                 // Extract meshes from all root nodes
-                List<NIFMesh> meshes = new List<NIFMesh>();
+                List<NIFMesh> renderMeshes = new List<NIFMesh>();
+                List<NIFMesh> collisionMeshes = new List<NIFMesh>();
                 Dictionary<string, NIFTexture> textures = new Dictionary<string, NIFTexture>();
                 NIFMaterial material = new NIFMaterial();
                 
@@ -763,15 +757,52 @@ namespace ESMSharp.NIF
                     if (!rootRef.IsValid() || rootRef.Object == null)
                         continue;
                     
+                    // Check if this is a RootCollisionNode (Morrowind collision mesh)
+                    var rootCollisionNode = rootRef.Object as Niflib.RootCollisionNode;
+                    if (rootCollisionNode != null)
+                    {
+                        // Extract collision meshes from RootCollisionNode
+                        ExtractMeshesFromNode(rootCollisionNode, collisionMeshes, textures, material, nifFile, Matrix4x4.identity, isCollision: true);
+                        continue;
+                    }
+                    
                     var rootNode = rootRef.Object as Niflib.NiNode;
                     if (rootNode == null)
                         continue;
                     
-                    // Extract meshes from this root node tree (pass nifFile for reference resolution)
-                    ExtractMeshesFromNode(rootNode, meshes, textures, material, nifFile);
+                    // Extract render meshes from regular root nodes
+                    // Start with identity transform - we'll apply child node transforms but not root transform
+                    // (similar to Blender's "discard_root_transforms" option)
+                    ExtractMeshesFromNode(rootNode, renderMeshes, textures, material, nifFile, Matrix4x4.identity, isCollision: false, depth: 0);
                 }
                 
-                if (meshes.Count == 0)
+                // Separate render meshes from collision meshes
+                List<NIFMesh> renderMeshesList = new List<NIFMesh>();
+                List<NIFMesh> collisionMeshesList = new List<NIFMesh>(collisionMeshes);
+                
+                //UnityEngine.Debug.Log($"Initial collision meshes from RootCollisionNode: {collisionMeshesList.Count}, render meshes: {renderMeshes.Count}");
+                
+                // Also check render meshes for collision candidates (no material/texture)
+                // Many static objects have a mesh with no texture data that should be used as collision mesh
+                foreach (var mesh in renderMeshes)
+                {
+                    if (mesh.Textures.Count == 0)
+                    {
+                        // Mesh with no textures is likely a collision mesh (name can be empty or not)
+                        mesh.IsCollisionMesh = true;
+                        collisionMeshesList.Add(mesh);
+                        //UnityEngine.Debug.Log($"Detected collision mesh (no textures): '{mesh.Name}' (empty name is common for collision meshes)");
+                    }
+                    else
+                    {
+                        // Keep as render mesh
+                        renderMeshesList.Add(mesh);
+                    }
+                }
+                
+                //UnityEngine.Debug.Log($"Final separation: {renderMeshesList.Count} render meshes, {collisionMeshesList.Count} collision meshes");
+                
+                if (renderMeshesList.Count == 0 && collisionMeshesList.Count == 0)
                 {
                     UnityEngine.Debug.LogWarning($"No meshes found in NIF file (niflib.net): {filename}");
                     return null;
@@ -799,8 +830,9 @@ namespace ESMSharp.NIF
                 
                 if (combineMeshes)
                 {
-                    // Combine all meshes into a single mesh with submeshes (each with its own material)
-                    var (combinedMesh, submeshMaterials) = CombineMeshes(meshes, vertexScale, meshRotation, _esm);
+                    // Combine all render meshes into a single mesh with submeshes (each with its own material)
+                    // Skip collision meshes for trees (they're not needed)
+                    var (combinedMesh, submeshMaterials) = CombineMeshes(renderMeshesList, vertexScale, meshRotation, _esm);
                     if (combinedMesh != null)
                     {
                         MeshFilter meshFilter = rootObj.AddComponent<MeshFilter>();
@@ -810,83 +842,200 @@ namespace ESMSharp.NIF
                         // Use sharedMaterials array for multiple materials (one per submesh)
                         meshRenderer.sharedMaterials = submeshMaterials;
                         
-                        UnityEngine.Debug.Log($"Created combined NIF model (niflib.net): {filename} with {meshes.Count} mesh(es) combined into {combinedMesh.subMeshCount} submesh(es) on root");
+                        //UnityEngine.Debug.Log($"Created combined NIF model (niflib.net): {filename} with {renderMeshesList.Count} render mesh(es) combined into {combinedMesh.subMeshCount} submesh(es) on root, {collisionMeshesList.Count} collision mesh(es) skipped");
                         return rootObj;
                     }
                 }
                 
-                // Create separate GameObjects for each mesh (for static objects)
-                for (int i = 0; i < meshes.Count; i++)
+                // Create separate GameObjects for each render mesh (for static objects)
+                for (int i = 0; i < renderMeshesList.Count; i++)
                 {
-                    NIFMesh nifMesh = meshes[i];
+                    NIFMesh nifMesh = renderMeshesList[i];
                     
                     GameObject meshObj = new GameObject(string.IsNullOrEmpty(nifMesh.Name) ? $"Mesh_{i}" : nifMesh.Name);
                     meshObj.transform.SetParent(rootObj.transform);
                     meshObj.transform.localPosition = Vector3.zero;
                     meshObj.transform.localRotation = Quaternion.identity;
-                    meshObj.transform.localScale = Vector3.one;
+                    // Note: We previously flipped X scale here to fix mirroring, but this was a workaround.
+                    // The correct fix is to use OpenMW's rotation conversion (negated axes) in PlaceStatics.cs
+                    // If mirroring still occurs, it may be due to NIF transform accumulation or coordinate system issues
+                    meshObj.transform.localScale = Vector3.one; // Use identity scale - rotation conversion should handle orientation
                     
-                    Mesh unityMesh = new Mesh();
-                    unityMesh.name = nifMesh.Name;
-                    
-                    // Convert and scale vertices (vertexScale is 1.0f for static objects, scaling happens at GameObject level)
-                    Vector3[] morrowindVertices = nifMesh.Vertices.ToArray();
-                    Vector3[] unityVertices = new Vector3[morrowindVertices.Length];
-                    for (int v = 0; v < morrowindVertices.Length; v++)
-                    {
-                        Vector3 scaledVertex = new Vector3(
-                            morrowindVertices[v].x * vertexScale,
-                            morrowindVertices[v].y * vertexScale,
-                            morrowindVertices[v].z * vertexScale
-                        );
-                        unityVertices[v] = meshRotation * scaledVertex;
-                    }
-                    unityMesh.vertices = unityVertices;
-                    unityMesh.triangles = nifMesh.Triangles.ToArray();
-                    
-                    if (nifMesh.UVs.Count > 0)
-                        unityMesh.uv = nifMesh.UVs.ToArray();
-                    
-                    if (nifMesh.Normals.Count > 0)
-                    {
-                        Vector3[] morrowindNormals = nifMesh.Normals.ToArray();
-                        Vector3[] unityNormals = new Vector3[morrowindNormals.Length];
-                        for (int n = 0; n < morrowindNormals.Length; n++)
-                        {
-                            unityNormals[n] = meshRotation * morrowindNormals[n];
-                        }
-                        unityMesh.normals = unityNormals;
-                    }
-                    else
-                    {
-                        unityMesh.RecalculateNormals();
-                    }
-                    
-                    if (nifMesh.Colors.Count > 0 && nifMesh.Colors.Count == nifMesh.Vertices.Count)
-                        unityMesh.colors = nifMesh.Colors.ToArray();
-                    
-                    unityMesh.RecalculateBounds();
+                    Mesh unityMesh = CreateUnityMeshFromNIFMesh(nifMesh, vertexScale);
                     
                     MeshFilter meshFilter = meshObj.AddComponent<MeshFilter>();
                     meshFilter.mesh = unityMesh;
                     
                     MeshRenderer meshRenderer = meshObj.AddComponent<MeshRenderer>();
-                    Material mat = CreateMaterialFromNIF(material, textures, _esm);
+                    Material mat = CreateMaterialFromNIF(nifMesh.Material, nifMesh.Textures, _esm);
                     meshRenderer.material = mat;
                 }
                 
-                UnityEngine.Debug.Log($"Created NIF model (niflib.net): {filename} with {meshes.Count} meshes");
+                // Create GameObjects for collision meshes with MeshFilter and MeshCollider (but no MeshRenderer)
+                for (int i = 0; i < collisionMeshesList.Count; i++)
+                {
+                    NIFMesh nifMesh = collisionMeshesList[i];
+                    
+                    GameObject collisionObj = new GameObject(string.IsNullOrEmpty(nifMesh.Name) ? $"Collision_{i}" : nifMesh.Name + "_Collision");
+                    collisionObj.transform.SetParent(rootObj.transform);
+                    collisionObj.transform.localPosition = Vector3.zero;
+                    collisionObj.transform.localRotation = Quaternion.identity;
+                    collisionObj.transform.localScale = Vector3.one; // Ensure collision objects have identity scale (parent scale will apply)
+                    // Note: We previously flipped X scale here to fix mirroring, but this was a workaround.
+                    // The correct fix is to use OpenMW's rotation conversion (negated axes) in PlaceStatics.cs
+                    
+                    Mesh unityMesh = CreateUnityMeshFromNIFMesh(nifMesh, vertexScale);
+                    
+                    // Add MeshFilter to store the mesh data
+                    MeshFilter meshFilter = collisionObj.AddComponent<MeshFilter>();
+                    meshFilter.mesh = unityMesh;
+                    
+                    // Explicitly ensure no MeshRenderer is added (Unity shouldn't add one automatically, but just in case)
+                    MeshRenderer existingRenderer = collisionObj.GetComponent<MeshRenderer>();
+                    if (existingRenderer != null)
+                    {
+                        //UnityEngine.Debug.LogWarning($"Removing unexpected MeshRenderer from collision mesh: {collisionObj.name}");
+                        UnityEngine.Object.DestroyImmediate(existingRenderer);
+                    }
+                    
+                    // Add MeshCollider that references the mesh in the MeshFilter (no MeshRenderer = not rendered)
+                    MeshCollider meshCollider = collisionObj.AddComponent<MeshCollider>();
+                    meshCollider.sharedMesh = unityMesh;
+                    meshCollider.convex = false; // Use non-convex for complex collision meshes
+                    
+                    //UnityEngine.Debug.Log($"Created collision mesh GameObject: {collisionObj.name} with MeshFilter and MeshCollider (no MeshRenderer)");
+                }
+                
+                //UnityEngine.Debug.Log($"Created NIF model (niflib.net): {filename} with {renderMeshesList.Count} render mesh(es) and {collisionMeshesList.Count} collision mesh(es)");
                 return rootObj;
             }
         }
         
         /// <summary>
+        /// Creates a Unity Mesh from a NIFMesh (helper method to avoid code duplication)
+        /// </summary>
+        private Mesh CreateUnityMeshFromNIFMesh(NIFMesh nifMesh, float vertexScale)
+        {
+            Mesh unityMesh = new Mesh();
+            unityMesh.name = nifMesh.Name;
+            
+            // Vertices are already transformed by NiNode transforms and coordinate system conversion in ExtractMeshFromTriShape
+            // We only need to apply vertex scaling here (vertexScale is 1.0f for static objects, scaling happens at GameObject level)
+            Vector3[] transformedVertices = nifMesh.Vertices.ToArray();
+            Vector3[] unityVertices = new Vector3[transformedVertices.Length];
+            for (int v = 0; v < transformedVertices.Length; v++)
+            {
+                // Apply vertex scale only (coordinate system conversion already applied in ExtractMeshFromTriShape)
+                unityVertices[v] = new Vector3(
+                    transformedVertices[v].x * vertexScale,
+                    transformedVertices[v].y * vertexScale,
+                    transformedVertices[v].z * vertexScale
+                );
+            }
+            unityMesh.vertices = unityVertices;
+            unityMesh.triangles = nifMesh.Triangles.ToArray();
+            
+            if (nifMesh.UVs.Count > 0)
+                unityMesh.uv = nifMesh.UVs.ToArray();
+            
+            if (nifMesh.Normals.Count > 0)
+            {
+                // Normals are already transformed by NiNode transforms and coordinate system conversion in ExtractMeshFromTriShape
+                Vector3[] transformedNormals = nifMesh.Normals.ToArray();
+                unityMesh.normals = transformedNormals;
+            }
+            else
+            {
+                unityMesh.RecalculateNormals();
+            }
+            
+            if (nifMesh.Colors.Count > 0 && nifMesh.Colors.Count == nifMesh.Vertices.Count)
+                unityMesh.colors = nifMesh.Colors.ToArray();
+            
+            unityMesh.RecalculateBounds();
+            
+            return unityMesh;
+        }
+        
+        /// <summary>
+        /// Builds a transform matrix from an NiAVObject's transform components
+        /// Uses proper matrix composition: Translation * Rotation * Scale (separate matrices)
+        /// This prevents scale from being mixed with rotation, which can cause reflection issues
+        /// </summary>
+        private Matrix4x4 BuildTransformMatrix(Niflib.NiAVObject obj)
+        {
+            if (obj == null)
+                return Matrix4x4.identity;
+            
+            // Check for negative scale in the Scale field
+            if (obj.Scale < 0)
+            {
+                UnityEngine.Debug.LogWarning($"NIF file contains negative scale field: {obj.Scale} in object '{obj.Name?.Value ?? "unnamed"}' - this may indicate mirroring");
+            }
+            
+            // OpenMW's toMatrix() multiplies rotation elements by scale directly
+            // This is what the NIF format expects, even though it mixes rotation and scale
+            Matrix4x4 rotation = (Matrix4x4)obj.Rotation;
+            
+            // Build transform matrix matching OpenMW's approach:
+            // 1. Start with translation
+            Matrix4x4 transform = Matrix4x4.Translate(obj.Translation);
+            
+            // 2. Multiply each rotation matrix element by scale (mixing rotation and scale)
+            transform.m00 = rotation.m00 * obj.Scale;
+            transform.m01 = rotation.m01 * obj.Scale;
+            transform.m02 = rotation.m02 * obj.Scale;
+            transform.m10 = rotation.m10 * obj.Scale;
+            transform.m11 = rotation.m11 * obj.Scale;
+            transform.m12 = rotation.m12 * obj.Scale;
+            transform.m20 = rotation.m20 * obj.Scale;
+            transform.m21 = rotation.m21 * obj.Scale;
+            transform.m22 = rotation.m22 * obj.Scale;
+            
+            return transform;
+        }
+        
+        /// <summary>
+        /// Accumulates transforms from the parent chain (from root to this object)
+        /// </summary>
+        private Matrix4x4 AccumulateParentTransforms(Niflib.NiAVObject obj)
+        {
+            Matrix4x4 accumulatedTransform = Matrix4x4.identity;
+            Niflib.NiAVObject current = obj;
+            
+            // Walk up the parent chain, accumulating transforms
+            while (current != null)
+            {
+                // Apply this object's transform
+                Matrix4x4 currentTransform = BuildTransformMatrix(current);
+                // Parent transforms are applied first (right-to-left multiplication)
+                accumulatedTransform = currentTransform * accumulatedTransform;
+                
+                // Move to parent
+                current = current.Parent;
+            }
+            
+            return accumulatedTransform;
+        }
+        
+        /// <summary>
         /// Extracts meshes from a NiNode tree using niflib.net
         /// </summary>
-        private void ExtractMeshesFromNode(Niflib.NiNode node, List<NIFMesh> meshes, Dictionary<string, NIFTexture> textures, NIFMaterial material, Niflib.NiFile nifFile = null)
+        private void ExtractMeshesFromNode(Niflib.NiNode node, List<NIFMesh> meshes, Dictionary<string, NIFTexture> textures, NIFMaterial material, Niflib.NiFile nifFile = null, Matrix4x4 parentTransform = default(Matrix4x4), bool isCollision = false, int depth = 0)
         {
             if (node == null)
                 return;
+            
+            // Note: We could log node scales here if needed for debugging
+            
+            // If parentTransform is default (identity), this is the root node - ignore its transform
+            // Otherwise, accumulate this node's transform with the parent transform
+            // (Similar to Blender's "discard_root_transforms" - root transform is ignored, child transforms are applied)
+            // OpenMW uses OSG's scene graph where child transforms are relative to parent
+            // We accumulate: parentTransform * childTransform (parent applied first, then child)
+            Matrix4x4 nodeTransform = parentTransform == default(Matrix4x4) 
+                ? Matrix4x4.identity  // Root node: ignore its transform
+                : parentTransform * BuildTransformMatrix(node);  // Child node: accumulate transform (parent * child)
             
             // Process children
             if (node.Children != null)
@@ -899,13 +1048,15 @@ namespace ESMSharp.NIF
                     var childNode = childRef.Object as Niflib.NiNode;
                     if (childNode != null)
                     {
-                        ExtractMeshesFromNode(childNode, meshes, textures, material, nifFile);
+                        // Pass accumulated transform to child nodes, preserve collision flag, increment depth
+                        ExtractMeshesFromNode(childNode, meshes, textures, material, nifFile, nodeTransform, isCollision, depth + 1);
                     }
                     
                     var triShape = childRef.Object as Niflib.NiTriShape;
                     if (triShape != null)
                     {
-                        ExtractMeshFromTriShape(triShape, meshes, textures, material, nifFile);
+                        // Apply accumulated parent transform to the mesh, mark as collision if needed
+                        ExtractMeshFromTriShape(triShape, meshes, textures, material, nifFile, nodeTransform, isCollision);
                     }
                 }
             }
@@ -945,7 +1096,7 @@ namespace ESMSharp.NIF
         /// <summary>
         /// Extracts mesh data from a NiTriShape using niflib.net
         /// </summary>
-        private void ExtractMeshFromTriShape(Niflib.NiTriShape triShape, List<NIFMesh> meshes, Dictionary<string, NIFTexture> textures, NIFMaterial material, Niflib.NiFile nifFile = null)
+        private void ExtractMeshFromTriShape(Niflib.NiTriShape triShape, List<NIFMesh> meshes, Dictionary<string, NIFTexture> textures, NIFMaterial material, Niflib.NiFile nifFile = null, Matrix4x4 parentTransform = default(Matrix4x4), bool isCollision = false)
         {
             if (triShape == null || triShape.Data == null || !triShape.Data.IsValid() || triShape.Data.Object == null)
                 return;
@@ -957,36 +1108,98 @@ namespace ESMSharp.NIF
             NIFMesh mesh = new NIFMesh();
             mesh.Name = triShape.Name != null ? triShape.Name.Value : "";
             
+            // Build transform for this NiTriShape (it's also a NiAVObject, so it has Translation/Rotation/Scale)
+            Matrix4x4 triShapeTransform = BuildTransformMatrix(triShape);
+            
+            // Combine with parent transform: parentTransform * triShapeTransform
+            // If parentTransform is default (identity), just use triShapeTransform
+            // OpenMW applies transforms through the scene graph, so we accumulate them here
+            Matrix4x4 morrowindTransform = parentTransform == default(Matrix4x4) 
+                ? triShapeTransform 
+                : parentTransform * triShapeTransform;
+            
+            // Check for reflection (negative determinant) in the upper-left 3x3 matrix
+            // This indicates a handedness flip that needs correction
+            float determinant = morrowindTransform.m00 * (morrowindTransform.m11 * morrowindTransform.m22 - morrowindTransform.m21 * morrowindTransform.m12)
+                              - morrowindTransform.m01 * (morrowindTransform.m10 * morrowindTransform.m22 - morrowindTransform.m20 * morrowindTransform.m12)
+                              + morrowindTransform.m02 * (morrowindTransform.m10 * morrowindTransform.m21 - morrowindTransform.m20 * morrowindTransform.m11);
+            
+            // Standard right-hand coordinate system conversion: Morrowind (Y-up) to Unity (Y-up)
+            // Rotate -90 degrees around X axis to convert from Morrowind's coordinate system
+            Quaternion coordSystemRotation = Quaternion.Euler(-90f, 0f, 0f);
+            
+            // If determinant is negative, we have a reflection - need to flip one axis to correct it
+            // We'll flip Z scale to correct the reflection
+            Matrix4x4 correctedTransform = morrowindTransform;
+            if (determinant < 0)
+            {
+                // Apply Z scale flip to correct the reflection
+                Matrix4x4 zFlip = Matrix4x4.Scale(new Vector3(1f, 1f, -1f));
+                correctedTransform = zFlip * morrowindTransform;
+            }
+            
             // Convert vertices from niflib Vector3 to Unity Vector3
-            // niflib.net uses Unity's Vector3 when UNITY is defined, so we can use it directly
+            // Apply corrected Morrowind transforms first, then coordinate system conversion
             mesh.Vertices = new List<Vector3>();
             foreach (var v in shapeData.Vertices)
             {
-                // niflib.net Vector3 is Unity's Vector3 when UNITY is defined
-                mesh.Vertices.Add(new Vector3(v.x, v.y, v.z));
+                Vector3 vertex = new Vector3(v.x, v.y, v.z);
+                // Apply corrected Morrowind transform first (in Morrowind coordinate space)
+                Vector3 morrowindTransformed = correctedTransform.MultiplyPoint3x4(vertex);
+                // Then apply coordinate system conversion (rotate -90 degrees around X)
+                Vector3 unityVertex = coordSystemRotation * morrowindTransformed;
+                mesh.Vertices.Add(unityVertex);
             }
             
             // Convert triangles
+            // If we corrected a reflection (negative determinant), reverse winding order
+            bool reverseWinding = (determinant < 0);
             if (shapeData.HasTriangles && shapeData.Triangles != null)
             {
                 mesh.Triangles = new List<int>();
                 foreach (var tri in shapeData.Triangles)
                 {
                     // Triangle class has X, Y, Z as ushort properties
-                    mesh.Triangles.Add((int)tri.X);
-                    mesh.Triangles.Add((int)tri.Y);
-                    mesh.Triangles.Add((int)tri.Z);
+                    if (reverseWinding)
+                    {
+                        // Reverse winding order to fix backface culling after reflection correction
+                        mesh.Triangles.Add((int)tri.X);
+                        mesh.Triangles.Add((int)tri.Z);
+                        mesh.Triangles.Add((int)tri.Y);
+                    }
+                    else
+                    {
+                        mesh.Triangles.Add((int)tri.X);
+                        mesh.Triangles.Add((int)tri.Y);
+                        mesh.Triangles.Add((int)tri.Z);
+                    }
                 }
             }
             
             // Convert normals
+            // Normals are directions, so we apply rotation and scale but not translation
+            // Extract rotation/scale from the corrected transform matrix (no translation)
             if (shapeData.HasNormals && shapeData.Normals != null)
             {
                 mesh.Normals = new List<Vector3>();
+                // For normals, we only need rotation (and uniform scale if present)
+                // Extract rotation/scale matrix from correctedTransform (upper-left 3x3)
+                Matrix4x4 rotationScaleMatrix = correctedTransform;
+                // Remove translation (set bottom row to 0,0,0,1)
+                rotationScaleMatrix.m03 = 0f;
+                rotationScaleMatrix.m13 = 0f;
+                rotationScaleMatrix.m23 = 0f;
+                
                 foreach (var n in shapeData.Normals)
                 {
-                    // niflib.net Vector3 is Unity's Vector3 when UNITY is defined
-                    mesh.Normals.Add(new Vector3(n.x, n.y, n.z));
+                    Vector3 normal = new Vector3(n.x, n.y, n.z);
+                    // Apply corrected Morrowind rotation and scale (no translation) using MultiplyVector
+                    Vector3 morrowindNormal = rotationScaleMatrix.MultiplyVector(normal);
+                    // Then apply coordinate system conversion rotation
+                    Vector3 unityNormal = coordSystemRotation * morrowindNormal;
+                    // Normalize to maintain unit length
+                    unityNormal.Normalize();
+                    mesh.Normals.Add(unityNormal);
                 }
             }
             
@@ -1021,12 +1234,12 @@ namespace ESMSharp.NIF
             var texturingProp = ResolveProperty(triShape, typeof(Niflib.NiTexturingProperty)) as Niflib.NiTexturingProperty;
             if (texturingProp != null)
             {
-                UnityEngine.Debug.Log($"Found NiTexturingProperty for mesh '{mesh.Name}' (via ResolveProperty), TextureCount={texturingProp.TextureCount}");
+                //UnityEngine.Debug.Log($"Found NiTexturingProperty for mesh '{mesh.Name}' (via ResolveProperty), TextureCount={texturingProp.TextureCount}");
                 
                 // Check TextureCount (MWGE checks this)
                 if (texturingProp.TextureCount > 0 && texturingProp.BaseTexture != null)
                 {
-                    UnityEngine.Debug.Log($"BaseTexture is not null, checking Source...");
+                    //UnityEngine.Debug.Log($"BaseTexture is not null, checking Source...");
                     // Extract BaseTexture (main diffuse texture) - MWGE uses GetTexture(0) which is BaseTexture
                     if (texturingProp.BaseTexture.Source != null)
                     {
@@ -1035,11 +1248,11 @@ namespace ESMSharp.NIF
                         if (sourceRef.IsValid() && sourceRef.Object == null && nifFile != null)
                         {
                             // Try to manually resolve the reference using the NiFile
-                            UnityEngine.Debug.LogWarning($"BaseTexture.Source is valid (RefId={sourceRef.RefId}) but Object is null. Attempting manual resolution...");
+                            //UnityEngine.Debug.LogWarning($"BaseTexture.Source is valid (RefId={sourceRef.RefId}) but Object is null. Attempting manual resolution...");
                             try
                             {
                                 sourceRef.SetRef(nifFile);
-                                UnityEngine.Debug.Log($"Manually resolved BaseTexture.Source reference, Object={sourceRef.Object?.GetType().Name ?? "null"}");
+                                //UnityEngine.Debug.Log($"Manually resolved BaseTexture.Source reference, Object={sourceRef.Object?.GetType().Name ?? "null"}");
                             }
                             catch (System.Exception ex)
                             {
@@ -1047,13 +1260,13 @@ namespace ESMSharp.NIF
                             }
                         }
                         
-                        UnityEngine.Debug.Log($"BaseTexture.Source is not null, IsValid={texturingProp.BaseTexture.Source.IsValid()}, RefId={texturingProp.BaseTexture.Source.RefId}, Object={texturingProp.BaseTexture.Source.Object?.GetType().Name ?? "null"}");
+                        //UnityEngine.Debug.Log($"BaseTexture.Source is not null, IsValid={texturingProp.BaseTexture.Source.IsValid()}, RefId={texturingProp.BaseTexture.Source.RefId}, Object={texturingProp.BaseTexture.Source.Object?.GetType().Name ?? "null"}");
                         if (texturingProp.BaseTexture.Source.IsValid() && texturingProp.BaseTexture.Source.Object != null)
                         {
                             var sourceTex = texturingProp.BaseTexture.Source.Object as Niflib.NiSourceTexture;
                             if (sourceTex != null)
                             {
-                                UnityEngine.Debug.Log($"NiSourceTexture found, UseExternal={sourceTex.UseExternal}, FileName='{sourceTex.FileName?.Value ?? "null"}'");
+                                //UnityEngine.Debug.Log($"NiSourceTexture found, UseExternal={sourceTex.UseExternal}, FileName='{sourceTex.FileName?.Value ?? "null"}'");
                                 // MWGE checks IsTextureExternal() - we check UseExternal
                                 if (sourceTex.UseExternal)
                                 {
@@ -1061,7 +1274,7 @@ namespace ESMSharp.NIF
                                     {
                                         string originalPath = sourceTex.FileName.Value;
                                         string texPath = NormalizeTexturePath(originalPath);
-                                        UnityEngine.Debug.Log($"Texture path: original='{originalPath}', normalized='{texPath}'");
+                                        //UnityEngine.Debug.Log($"Texture path: original='{originalPath}', normalized='{texPath}'");
                                         if (!string.IsNullOrEmpty(texPath))
                                         {
                                             // Store in both per-mesh dictionary and shared dictionary (for backward compatibility)
@@ -1070,42 +1283,42 @@ namespace ESMSharp.NIF
                                             {
                                                 textures["BaseTexture"] = new NIFTexture { FilePath = texPath, Enabled = true };
                                             }
-                                            UnityEngine.Debug.Log($"✓ Extracted BaseTexture from NIF: {texPath} (external texture)");
+                                            //UnityEngine.Debug.Log($"✓ Extracted BaseTexture from NIF: {texPath} (external texture)");
                                         }
                                     }
                                     else
                                     {
-                                        UnityEngine.Debug.LogWarning($"NiSourceTexture has UseExternal=true but FileName is null or empty");
+                                        //UnityEngine.Debug.LogWarning($"NiSourceTexture has UseExternal=true but FileName is null or empty");
                                     }
                                 }
                                 else
                                 {
-                                    UnityEngine.Debug.LogWarning($"NiSourceTexture is not external (UseExternal=false), skipping");
+                                    //UnityEngine.Debug.LogWarning($"NiSourceTexture is not external (UseExternal=false), skipping");
                                 }
                             }
                             else
                             {
-                                UnityEngine.Debug.LogWarning($"BaseTexture.Source.Object is not a NiSourceTexture: {texturingProp.BaseTexture.Source.Object?.GetType().Name ?? "null"}");
+                                //UnityEngine.Debug.LogWarning($"BaseTexture.Source.Object is not a NiSourceTexture: {texturingProp.BaseTexture.Source.Object?.GetType().Name ?? "null"}");
                             }
                         }
                         else
                         {
-                            UnityEngine.Debug.LogWarning($"BaseTexture.Source is not valid or Object is null");
+                            //UnityEngine.Debug.LogWarning($"BaseTexture.Source is not valid or Object is null");
                         }
                     }
                     else
                     {
-                        UnityEngine.Debug.LogWarning($"BaseTexture.Source is null");
+                        //UnityEngine.Debug.LogWarning($"BaseTexture.Source is null");
                     }
                 }
                 else
                 {
-                    UnityEngine.Debug.LogWarning($"NiTexturingProperty has TextureCount={texturingProp?.TextureCount ?? 0} or BaseTexture is null");
+                    //UnityEngine.Debug.LogWarning($"NiTexturingProperty has TextureCount={texturingProp?.TextureCount ?? 0} or BaseTexture is null");
                 }
             }
             else
             {
-                UnityEngine.Debug.LogWarning($"No NiTexturingProperty found for mesh '{mesh.Name}' (checked object and parent chain)");
+                //UnityEngine.Debug.LogWarning($"No NiTexturingProperty found for mesh '{mesh.Name}' (checked object and parent chain)");
             }
             
             // Extract material properties
@@ -1127,6 +1340,14 @@ namespace ESMSharp.NIF
             // Store per-mesh textures and material
             mesh.Textures = meshTextures;
             mesh.Material = meshMaterial;
+            
+            // Mark as collision mesh if:
+            // 1. Explicitly marked as collision (from RootCollisionNode)
+            // Note: We'll check for no textures later during separation, as empty names are common for collision meshes
+            if (isCollision)
+            {
+                mesh.IsCollisionMesh = true;
+            }
             
             meshes.Add(mesh);
         }

@@ -64,7 +64,7 @@ namespace ESMSharp.TES3
                     switch (name)
                     {
                         case "LAND":
-                            Debug.Log("Land Record");
+                            //Debug.Log("Land Record");
                             RecordLand lndrecord = new RecordLand();
                             lndrecord.Deserialize(reader, name);
                             mRecord = lndrecord;
@@ -83,21 +83,21 @@ namespace ESMSharp.TES3
                             break;
 
                         case "LTEX":
-                            Debug.Log("Land Texture Record");
+                            //Debug.Log("Land Texture Record");
                             RecordLTex ltexrecord = new RecordLTex();
                             ltexrecord.Deserialize(reader, name);
                             mRecord = ltexrecord;
                             break;
 
                         case "CELL":
-                            Debug.Log("Cell Record");
+                            //Debug.Log("Cell Record");
                             RecordCell cellrecord = new RecordCell();
                             cellrecord.Deserialize(reader, name);
                             mRecord = cellrecord;
                             break;
 
                         case "STAT":
-                            Debug.Log("Static Record");
+                            //Debug.Log("Static Record");
                             RecordStat statrecord = new RecordStat();
                             statrecord.Deserialize(reader, name);
                             mRecord = statrecord;
@@ -122,7 +122,7 @@ namespace ESMSharp.TES3
                 _records = mRecords.ToArray();
                 _loaded = true;
             }
-            Debug.Log("Max Terrain Height: " + MaxHeight);
+            //Debug.Log("Max Terrain Height: " + MaxHeight);
         }
 
 

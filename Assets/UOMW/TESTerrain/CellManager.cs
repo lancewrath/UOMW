@@ -105,7 +105,7 @@ namespace ESMSharp.TES3Terrain
                 }
             }
 
-            UnityEngine.Debug.Log($"Created {cellCount} cell GameObjects");
+            //UnityEngine.Debug.Log($"Created {cellCount} cell GameObjects");
         }
 
         /// <summary>

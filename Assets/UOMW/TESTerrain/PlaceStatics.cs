@@ -59,7 +59,7 @@ namespace ESMSharp.TES3Terrain
                 System.Array.Copy(_treeInstances.ToArray(), 0, allTrees, existingTrees.Length, _treeInstances.Count);
                 terrainData.treeInstances = allTrees;
                 
-                UnityEngine.Debug.Log($"Added {_treeInstances.Count} tree instances to terrain (total: {allTrees.Length}, unique prototypes: {_treePrototypes.Count})");
+                //UnityEngine.Debug.Log($"Added {_treeInstances.Count} tree instances to terrain (total: {allTrees.Length}, unique prototypes: {_treePrototypes.Count})");
             }
         }
 
@@ -123,7 +123,7 @@ namespace ESMSharp.TES3Terrain
         {
             if (cellRecord == null || cellRecord.subRecords == null)
             {
-                UnityEngine.Debug.LogWarning("TESCell: Cannot generate statics - cell record is null or has no subrecords");
+                //UnityEngine.Debug.LogWarning("TESCell: Cannot generate statics - cell record is null or has no subrecords");
                 return;
             }
 
@@ -148,7 +148,7 @@ namespace ESMSharp.TES3Terrain
 
             if (isInterior || (cellName != null && cellName.IndexOf("interior", StringComparison.OrdinalIgnoreCase) >= 0))
             {
-                UnityEngine.Debug.Log($"TESCell: Skipping interior cell at ({cellGridX}, {cellGridY})");
+                //UnityEngine.Debug.Log($"TESCell: Skipping interior cell at ({cellGridX}, {cellGridY})");
                 return;
             }
 
@@ -240,6 +240,11 @@ namespace ESMSharp.TES3Terrain
                 {
                     // XSCL contains the object scale
                     currentScale = xscal.scale;
+                    // Debug: Log negative scales to see which objects need mirroring
+                    if (currentScale < 0)
+                    {
+                        UnityEngine.Debug.LogWarning($"XSCL: Negative scale {currentScale} in cell ({cellGridX}, {cellGridY})");
+                    }
                 }
             }
 
@@ -252,7 +257,7 @@ namespace ESMSharp.TES3Terrain
                 PlaceReference(currentObjectID, currentREFP, currentScale, statRecordsByName, cellParent, cellGridX, cellGridY, ObjectType.LargeStructures, terrain, parent, ref placedStructuresCount, ref failedStructuresCount, allRecords);
             }
 
-            UnityEngine.Debug.Log($"TESCell ({cellGridX}, {cellGridY}): Placed {placedTreesCount} trees ({failedTreesCount} failed), {placedStructuresCount} structures ({failedStructuresCount} failed)");
+            //UnityEngine.Debug.Log($"TESCell ({cellGridX}, {cellGridY}): Placed {placedTreesCount} trees ({failedTreesCount} failed), {placedStructuresCount} structures ({failedStructuresCount} failed)");
             
             // Apply tree instances to terrain if any were placed
             if (terrain != null && terrain.terrainData != null && _treeInstances.Count > 0)
@@ -277,9 +282,9 @@ namespace ESMSharp.TES3Terrain
                 
                 // Verify trees were actually added to terrain data
                 TreeInstance[] verifyTrees = terrainData.treeInstances;
-                UnityEngine.Debug.Log($"TESCell: Added {treeCount} tree instances to terrain (total now: {allTrees.Length}, verified: {verifyTrees.Length}). " +
-                    $"Terrain settings: treeDistance={terrain.treeDistance}, drawTreesAndFoliage={terrain.drawTreesAndFoliage}, " +
-                    $"treePrototypes={terrainData.treePrototypes.Length}");
+                //UnityEngine.Debug.Log($"TESCell: Added {treeCount} tree instances to terrain (total now: {allTrees.Length}, verified: {verifyTrees.Length}). " +
+                //    $"Terrain settings: treeDistance={terrain.treeDistance}, drawTreesAndFoliage={terrain.drawTreesAndFoliage}, " +
+                //    $"treePrototypes={terrainData.treePrototypes.Length}");
                 
                 // Log first few tree instances for verification (from the actual terrain data, not our list)
                 // Also calculate world positions to help debug visibility
@@ -299,10 +304,10 @@ namespace ESMSharp.TES3Terrain
                             terrainPos.z + ti.position.z * terrainSize.z
                         );
                         
-                        UnityEngine.Debug.Log($"  Tree {i} (from terrain): prototypeIndex={ti.prototypeIndex}, " +
-                            $"normalizedPos=({ti.position.x:F4},{ti.position.y:F4},{ti.position.z:F4}), " +
-                            $"worldPos=({worldPos.x:F2},{worldPos.y:F2},{worldPos.z:F2}), " +
-                            $"scale=({ti.widthScale:F4},{ti.heightScale:F4}), rotation={ti.rotation:F4}");
+                        //UnityEngine.Debug.Log($"  Tree {i} (from terrain): prototypeIndex={ti.prototypeIndex}, " +
+                        //    $"normalizedPos=({ti.position.x:F4},{ti.position.y:F4},{ti.position.z:F4}), " +
+                        //    $"worldPos=({worldPos.x:F2},{worldPos.y:F2},{worldPos.z:F2}), " +
+                        //    $"scale=({ti.widthScale:F4},{ti.heightScale:F4}), rotation={ti.rotation:F4}");
                     }
                 }
                 
@@ -359,7 +364,7 @@ namespace ESMSharp.TES3Terrain
                 }
             }
 
-            UnityEngine.Debug.Log($"Found {statRecordsByName.Count} STAT records by name");
+            //UnityEngine.Debug.Log($"Found {statRecordsByName.Count} STAT records by name");
 
             // Iterate through CELL records
             int cellCount = 0;
@@ -375,7 +380,7 @@ namespace ESMSharp.TES3Terrain
                 // Check if cell has subrecords
                 if (cell.subRecords == null)
                 {
-                    UnityEngine.Debug.LogWarning("Cell has no subrecords, skipping");
+                    //UnityEngine.Debug.LogWarning("Cell has no subrecords, skipping");
                     continue;
                 }
 
@@ -484,7 +489,7 @@ namespace ESMSharp.TES3Terrain
             }
 
             string typeName = objectType.ToString();
-            UnityEngine.Debug.Log($"Placed {placedCount} {typeName} from {cellCount} cells ({failedCount} failed)");
+            //UnityEngine.Debug.Log($"Placed {placedCount} {typeName} from {cellCount} cells ({failedCount} failed)");
             
             // Clean up BSA archive if opened
             if (_bsaArchive != null)
@@ -519,7 +524,7 @@ namespace ESMSharp.TES3Terrain
                     GameObject treeModel = _nifLoader.LoadNIFFromCache(baseFilename, combineMeshes: true);
                     if (treeModel == null)
                     {
-                        UnityEngine.Debug.LogWarning($"Failed to load tree model: {baseFilename}");
+                        //UnityEngine.Debug.LogWarning($"Failed to load tree model: {baseFilename}");
                         return false;
                     }
 
@@ -527,7 +532,7 @@ namespace ESMSharp.TES3Terrain
                     treePrototype = CreateTreePrototypeFromModel(treeModel, baseFilename);
                     if (treePrototype == null)
                     {
-                        UnityEngine.Debug.LogWarning($"Failed to create tree prototype from: {baseFilename}");
+                        //UnityEngine.Debug.LogWarning($"Failed to create tree prototype from: {baseFilename}");
                         return false;
                     }
 
@@ -542,7 +547,7 @@ namespace ESMSharp.TES3Terrain
                     prototypeIndex = existingPrototypes.Length;
                     _treePrototypes[baseFilename] = treePrototype;
                     
-                    UnityEngine.Debug.Log($"Created tree prototype for: {baseFilename} (index {prototypeIndex})");
+                    //UnityEngine.Debug.Log($"Created tree prototype for: {baseFilename} (index {prototypeIndex})");
                 }
                 else
                 {
@@ -559,7 +564,7 @@ namespace ESMSharp.TES3Terrain
                     
                     if (prototypeIndex == -1)
                     {
-                        UnityEngine.Debug.LogWarning($"Tree prototype not found in terrain data: {baseFilename}");
+                        //UnityEngine.Debug.LogWarning($"Tree prototype not found in terrain data: {baseFilename}");
                         return false;
                     }
                 }
@@ -595,8 +600,8 @@ namespace ESMSharp.TES3Terrain
                 {
                     if (_treeInstances.Count < 5)
                     {
-                        UnityEngine.Debug.LogWarning($"Tree has invalid Y coordinate (likely interior cell or corrupted data): " +
-                            $"cell=({cellGridX},{cellGridY}), refp.z={refp.z} (Y/Height)");
+                        //UnityEngine.Debug.LogWarning($"Tree has invalid Y coordinate (likely interior cell or corrupted data): " +
+                        //    $"cell=({cellGridX},{cellGridY}), refp.z={refp.z} (Y/Height)");
                     }
                     return false;
                 }
@@ -630,9 +635,9 @@ namespace ESMSharp.TES3Terrain
                 {
                     if (_treeInstances.Count < 5)
                     {
-                        UnityEngine.Debug.LogWarning($"Tree outside terrain bounds, skipping: normalized=({normalizedX},{normalizedZ}), " +
-                            $"world=({unityWorldPosition.x},{unityWorldPosition.z}), terrain bounds=({terrainPosition.x} to {terrainPosition.x + terrainSize.x}, " +
-                            $"{terrainPosition.z} to {terrainPosition.z + terrainSize.z})");
+                        //UnityEngine.Debug.LogWarning($"Tree outside terrain bounds, skipping: normalized=({normalizedX},{normalizedZ}), " +
+                        //    $"world=({unityWorldPosition.x},{unityWorldPosition.z}), terrain bounds=({terrainPosition.x} to {terrainPosition.x + terrainSize.x}, " +
+                        //    $"{terrainPosition.z} to {terrainPosition.z + terrainSize.z})");
                     }
                     return false;
                 }
@@ -657,18 +662,18 @@ namespace ESMSharp.TES3Terrain
                     float expectedCellX = cellGridX * 64f + terrainPosition.x; // Each cell is 64 units, plus terrain offset
                     float expectedCellZ = cellGridY * 64f + terrainPosition.z;
                     
-                    UnityEngine.Debug.Log($"Tree placement: cell=({cellGridX},{cellGridY}), " +
-                        $"refp(REFP format: X={refp.x}, Z={refp.y}, Y={refp.z}), " +
-                        $"scaleFactor={MORROWIND_TO_TERRAIN_SCALE}, " +
-                        $"morrowindWorld(scaled)=({morrowindWorldPos.x},{morrowindWorldPos.y},{morrowindWorldPos.z}), " +
-                        $"unityWorld=({unityWorldPosition.x},{unityWorldPosition.y},{unityWorldPosition.z}), " +
-                        $"terrainPos=({terrainPosition.x},{terrainPosition.y},{terrainPosition.z}), " +
-                        $"terrainSize=({terrainSize.x},{terrainSize.y},{terrainSize.z}), " +
-                        $"normalized=({normalizedX},{normalizedZ}), " +
-                        $"terrainHeight={terrainHeight}, " +
-                        $"heightOffset(normalized)={heightOffset}, " +
-                        $"treeInstancePos=({normalizedX},{heightOffset},{normalizedZ}), " +
-                        $"expectedCellCenter=({expectedCellX},{expectedCellZ})");
+                    //UnityEngine.Debug.Log($"Tree placement: cell=({cellGridX},{cellGridY}), " +
+                    //    $"refp(REFP format: X={refp.x}, Z={refp.y}, Y={refp.z}), " +
+                    //    $"scaleFactor={MORROWIND_TO_TERRAIN_SCALE}, " +
+                    //    $"morrowindWorld(scaled)=({morrowindWorldPos.x},{morrowindWorldPos.y},{morrowindWorldPos.z}), " +
+                    //    $"unityWorld=({unityWorldPosition.x},{unityWorldPosition.y},{unityWorldPosition.z}), " +
+                    //    $"terrainPos=({terrainPosition.x},{terrainPosition.y},{terrainPosition.z}), " +
+                    //    $"terrainSize=({terrainSize.x},{terrainSize.y},{terrainSize.z}), " +
+                    //    $"normalized=({normalizedX},{normalizedZ}), " +
+                    //    $"terrainHeight={terrainHeight}, " +
+                    //    $"heightOffset(normalized)={heightOffset}, " +
+                    //    $"treeInstancePos=({normalizedX},{heightOffset},{normalizedZ}), " +
+                    //    $"expectedCellCenter=({expectedCellX},{expectedCellZ})");
                 }
                 
                 // Create tree instance
@@ -686,14 +691,14 @@ namespace ESMSharp.TES3Terrain
                 treeInstance.rotation = rotationY;
                 
                 // Debug: Log tree instance details for first few trees
-                if (_treeInstances.Count < 5)
-                {
-                    UnityEngine.Debug.Log($"Tree instance created: prototypeIndex={prototypeIndex}, " +
-                        $"position=({treeInstance.position.x},{treeInstance.position.y},{treeInstance.position.z}), " +
-                        $"widthScale={treeInstance.widthScale}, heightScale={treeInstance.heightScale}, " +
-                        $"rotation={treeInstance.rotation} (yaw={refp.yaw}°), " +
-                        $"prototype valid={treePrototype != null}, prefab={treePrototype?.prefab?.name ?? "null"}");
-                }
+                //if (_treeInstances.Count < 5)
+                //{
+                //    UnityEngine.Debug.Log($"Tree instance created: prototypeIndex={prototypeIndex}, " +
+                //        $"position=({treeInstance.position.x},{treeInstance.position.y},{treeInstance.position.z}), " +
+                //        $"widthScale={treeInstance.widthScale}, heightScale={treeInstance.heightScale}, " +
+                //        $"rotation={treeInstance.rotation} (yaw={refp.yaw}°), " +
+                //        $"prototype valid={treePrototype != null}, prefab={treePrototype?.prefab?.name ?? "null"}");
+                //}
                 
                 _treeInstances.Add(treeInstance);
                 
@@ -731,7 +736,7 @@ namespace ESMSharp.TES3Terrain
                 // If mesh is on a child, we need to move it to root for Unity terrain
                 if (meshFilter != null && meshRenderer != null && meshFilter.sharedMesh != null)
                 {
-                    UnityEngine.Debug.LogWarning($"Tree model {modelName} has mesh on child object. Moving to root for Unity terrain compatibility.");
+                    //UnityEngine.Debug.LogWarning($"Tree model {modelName} has mesh on child object. Moving to root for Unity terrain compatibility.");
                     
                     // Move mesh components to root
                     Mesh mesh = meshFilter.sharedMesh;
@@ -763,7 +768,7 @@ namespace ESMSharp.TES3Terrain
             prototype.prefab = treeModel; // Unity will use the prefab for rendering
             prototype.bendFactor = 0.0f; // Trees don't bend in Morrowind
             
-            UnityEngine.Debug.Log($"Created tree prototype for {modelName}: {meshFilter.sharedMesh.vertexCount} vertices, {meshFilter.sharedMesh.triangles.Length / 3} triangles");
+            //UnityEngine.Debug.Log($"Created tree prototype for {modelName}: {meshFilter.sharedMesh.vertexCount} vertices, {meshFilter.sharedMesh.triangles.Length / 3} triangles");
             
             return prototype;
         }
@@ -1082,6 +1087,12 @@ namespace ESMSharp.TES3Terrain
                 // Strip any subdirectory paths from filename (use just the base filename)
                 string baseFilename = Path.GetFileName(modelFilename);
                 
+                // Debug: Log scale value for troubleshooting
+                if (Mathf.Abs(scale - 1.0f) > 0.001f)
+                {
+                    UnityEngine.Debug.LogWarning($"XSCL: Scale={scale} for {baseFilename} in cell ({cellGridX}, {cellGridY})");
+                }
+                
                 // Convert Morrowind world coordinates to Unity world coordinates
                 // Morrowind uses 8192 units per cell, Unity terrain uses 64 units per cell
                 // Same conversion as trees: scale by 64/8192 = 1/128
@@ -1112,14 +1123,18 @@ namespace ESMSharp.TES3Terrain
                 );
                 
                 // Convert Morrowind rotation to Unity rotation
-                // Morrowind uses Euler angles in radians: roll, yaw, pitch
-                // Unity uses degrees: X, Y, Z
-                // Pitch and yaw are swapped: Morrowind pitch -> Unity Y, Morrowind yaw -> Unity X
-                // Convert radians to degrees using Mathf.Rad2Deg
+                // OpenMW's makeOsgQuat uses: Quat(rot[2], (0,0,-1)) * Quat(rot[1], (0,-1,0)) * Quat(rot[0], (-1,0,0))
+                // Where rot[0]=pitch, rot[1]=yaw, rot[2]=roll (in OpenMW's Position struct)
+                // Our REFP stores: roll, yaw, pitch (in that order when reading from file)
+                // So: refp.roll = rot[2], refp.yaw = rot[1], refp.pitch = rot[0]
+                // OpenMW applies: roll around -Z, then yaw around -Y, then pitch around -X
+                // Unity Euler applies rotations in Z, X, Y order (intrinsic rotations)
+                // User reports things rotated on X when they should be on Y - this suggests pitch/yaw might be swapped
+                // Or the axis mapping needs adjustment. Let's try swapping pitch and yaw:
                 Quaternion unityRotation = Quaternion.Euler(
-                    refp.yaw * Mathf.Rad2Deg,      // Yaw -> X (converted to degrees)
-                    -refp.pitch * Mathf.Rad2Deg,   // Pitch -> Y (negated, converted to degrees)
-                    -refp.roll * Mathf.Rad2Deg     // Roll -> Z (negated, converted to degrees)
+                    -refp.yaw * Mathf.Rad2Deg,    // Yaw -> X (swapped with pitch, negated to match OpenMW's -Y axis)
+                    -refp.pitch * Mathf.Rad2Deg,  // Pitch -> Y (swapped with yaw, negated to match OpenMW's -X axis)
+                    -refp.roll * Mathf.Rad2Deg    // Roll -> Z (negated to match OpenMW's -Z axis)
                 );
                 
                 // Check if we've already loaded this model (mesh instancing)
@@ -1133,10 +1148,26 @@ namespace ESMSharp.TES3Terrain
                     // Set position, rotation, scale BEFORE parenting
                     instanceObj.transform.position = unityPosition;
                     instanceObj.transform.rotation = unityRotation;
+                    
                     // XSCL scale multiplies the base GameObject scale (MORROWIND_TO_TERRAIN_SCALE = 0.0078125), not replaces it
                     // Base scale is already applied in NIFLoader, so we multiply by XSCL here
-                    instanceObj.transform.localScale = instanceObj.transform.localScale * scale;
-
+                    // IMPORTANT: The template may have the reflection fix already applied (Z scale negated)
+                    // We need to use the ORIGINAL base scale, not read it from the instance
+                    // Use the existing MORROWIND_TO_TERRAIN_SCALE constant from the enclosing scope
+                    Vector3 instanceBaseScale = new Vector3(MORROWIND_TO_TERRAIN_SCALE, MORROWIND_TO_TERRAIN_SCALE, MORROWIND_TO_TERRAIN_SCALE);
+                    
+                    // Apply XSCL scale
+                    if (scale < 0)
+                    {
+                        // Negative scale = mirror object (use absolute value)
+                        instanceObj.transform.localScale = instanceBaseScale * Mathf.Abs(scale);
+                    }
+                    else
+                    {
+                        // Positive scale = normal scaling
+                        instanceObj.transform.localScale = instanceBaseScale * scale;
+                    }
+                    
                     // Set name
                     if (objectId != null && !string.IsNullOrEmpty(objectId.objectId))
                     {
@@ -1145,34 +1176,26 @@ namespace ESMSharp.TES3Terrain
 
                     // Add LOD component
                     AddLODToObject(instanceObj);
-
-                    // Debug: Log position before parenting
-                    Vector3 instancePosBeforeParent = instanceObj.transform.position;
                     
                     // Parent to terrain or specified parent
                     // Use worldPositionStays: true to preserve world position when parenting
                     // This prevents Unity from converting world position to local coordinates
                     if (parent != null)
                     {
-                        UnityEngine.Debug.Log($"Before parenting: worldPos=({instancePosBeforeParent.x:F2}, {instancePosBeforeParent.y:F2}, {instancePosBeforeParent.z:F2}), " +
-                            $"parent worldPos=({parent.position.x:F2}, {parent.position.y:F2}, {parent.position.z:F2}), " +
-                            $"parent localPos=({parent.localPosition.x:F2}, {parent.localPosition.y:F2}, {parent.localPosition.z:F2})");
                         instanceObj.transform.SetParent(parent, worldPositionStays: true);
                     }
                     
-                    // Debug: Log position after parenting
-                    Vector3 instancePosAfterParent = instanceObj.transform.position;
-                    Vector3 instanceLocalPosAfterParent = instanceObj.transform.localPosition;
+                    // Fix reflection issues: negate Z scale and negate Yaw
+                    // This must be done AFTER parenting to ensure it's applied to all objects
+                    Vector3 currentScale = instanceObj.transform.localScale;
+                    instanceObj.transform.localScale = new Vector3(currentScale.x, currentScale.y, -currentScale.z);
                     
-                    // Calculate expected cell position in Unity coordinates
-                    float expectedCellX = cellGridX * 64f; // Each cell is 64 units
-                    float expectedCellZ = cellGridY * 64f;
-                    
-                    UnityEngine.Debug.Log($"Placed static object instance: {instanceObj.name} " +
-                        $"worldPos=({instancePosAfterParent.x:F2}, {instancePosAfterParent.y:F2}, {instancePosAfterParent.z:F2}), " +
-                        $"localPos=({instanceLocalPosAfterParent.x:F2}, {instanceLocalPosAfterParent.y:F2}, {instanceLocalPosAfterParent.z:F2}), " +
-                        $"(Morrowind REFP: x={refp.x:F2} (X), y={refp.y:F2} (Z/North), z={refp.z:F2} (Y/Height), scaled: ({scaledX:F2}, {scaledY:F2}, {scaledZ:F2}), " +
-                        $"cell=({cellGridX},{cellGridY}), expectedCellCenter=({expectedCellX:F2},0,{expectedCellZ:F2}))");
+                    // Negate Yaw (Y rotation): extract Euler angles, negate Y, rebuild quaternion
+                    Vector3 euler = instanceObj.transform.rotation.eulerAngles;
+                    // Convert to -180 to 180 range for proper negation
+                    float yaw = euler.y;
+                    if (yaw > 180f) yaw -= 360f;
+                    instanceObj.transform.rotation = Quaternion.Euler(euler.x, -yaw, euler.z);
 
                     return true;
                 }
@@ -1186,15 +1209,31 @@ namespace ESMSharp.TES3Terrain
                 }
 
                 // Store the loaded model for future instancing
+                // IMPORTANT: Store the model BEFORE applying any instance-specific transforms
+                // The template should remain in its base state (no position, rotation, scale, or reflection fix)
+                // Each instance (including this first one) will get its own transforms applied
                 _loadedModels[baseFilename] = modelObj;
 
                 // Set position and rotation BEFORE parenting
                 modelObj.transform.position = unityPosition;
                 modelObj.transform.rotation = unityRotation;
+                
                 // XSCL scale multiplies the base GameObject scale (MORROWIND_TO_TERRAIN_SCALE = 0.0078125), not replaces it
                 // Base scale is already applied in NIFLoader, so we multiply by XSCL here
-                modelObj.transform.localScale = modelObj.transform.localScale * scale;
-
+                Vector3 modelBaseScale = modelObj.transform.localScale;
+                
+                // Apply XSCL scale
+                if (scale < 0)
+                {
+                    // Negative scale = mirror object (use absolute value)
+                    modelObj.transform.localScale = modelBaseScale * Mathf.Abs(scale);
+                }
+                else
+                {
+                    // Positive scale = normal scaling
+                    modelObj.transform.localScale = modelBaseScale * scale;
+                }
+                
                 // Set name
                 if (objectId != null && !string.IsNullOrEmpty(objectId.objectId))
                 {
@@ -1208,23 +1247,27 @@ namespace ESMSharp.TES3Terrain
                 // Add LOD component for distance-based culling
                 // Add to root and all children that have renderers
                 AddLODToObject(modelObj);
-
-                // Debug: Log position before parenting
-                Vector3 modelPosBeforeParent = modelObj.transform.position;
                 
                 // Parent to terrain or specified parent
                 // Use worldPositionStays: true to preserve world position when parenting
                 // This prevents Unity from converting world position to local coordinates
                 if (parent != null)
                 {
-                    UnityEngine.Debug.Log($"Before parenting (new model): worldPos=({modelPosBeforeParent.x:F2}, {modelPosBeforeParent.y:F2}, {modelPosBeforeParent.z:F2}), " +
-                        $"parent worldPos=({parent.position.x:F2}, {parent.position.y:F2}, {parent.position.z:F2})");
                     modelObj.transform.SetParent(parent, worldPositionStays: true);
                 }
                 
-                // Debug: Log position after parenting
-                Vector3 modelPosAfterParent = modelObj.transform.position;
-                UnityEngine.Debug.Log($"After parenting (new model): worldPos=({modelPosAfterParent.x:F2}, {modelPosAfterParent.y:F2}, {modelPosAfterParent.z:F2})");
+                // Fix reflection issues: negate Z scale and negate Yaw
+                // This must be done AFTER parenting to ensure it's applied to all objects
+                // Apply to this instance (the first one, which is also stored as template)
+                Vector3 modelCurrentScale = modelObj.transform.localScale;
+                modelObj.transform.localScale = new Vector3(modelCurrentScale.x, modelCurrentScale.y, -modelCurrentScale.z);
+                
+                // Negate Yaw (Y rotation): extract Euler angles, negate Y, rebuild quaternion
+                Vector3 modelEuler = modelObj.transform.rotation.eulerAngles;
+                // Convert to -180 to 180 range for proper negation
+                float modelYaw = modelEuler.y;
+                if (modelYaw > 180f) modelYaw -= 360f;
+                modelObj.transform.rotation = Quaternion.Euler(modelEuler.x, -modelYaw, modelEuler.z);
 
                 return true;
             }

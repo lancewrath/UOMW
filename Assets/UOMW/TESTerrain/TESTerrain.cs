@@ -60,7 +60,7 @@ namespace ESMSharp.TES3Terrain
             }
             catch (System.Exception ex)
             {
-                UnityEngine.Debug.LogWarning($"Failed to set texture import settings for {texturePath}: {ex.Message}");
+                //UnityEngine.Debug.LogWarning($"Failed to set texture import settings for {texturePath}: {ex.Message}");
             }
         }
         #endif
@@ -175,7 +175,7 @@ namespace ESMSharp.TES3Terrain
                             break;
 
                         default:
-                            UnityEngine.Debug.LogWarning($"Unsupported DDS format: {image.Format}, attempting fallback (stride: {stride})");
+                            //UnityEngine.Debug.LogWarning($"Unsupported DDS format: {image.Format}, attempting fallback (stride: {stride})");
                             // Fallback: try to read based on stride
                             int bytesPerPixel = stride / width;
                             if (bytesPerPixel == 4)
@@ -330,13 +330,13 @@ namespace ESMSharp.TES3Terrain
                         {
                             textureIndexToNames[textureIndex] = (primaryName ?? fallbackName, fallbackName);
                             string source = !string.IsNullOrEmpty(primaryName) ? "NAME" : "DATA";
-                            UnityEngine.Debug.Log($"Texture index {textureIndex} -> primary: '{primaryName ?? fallbackName}', fallback: '{fallbackName}' (from {source})");
+                            //UnityEngine.Debug.Log($"Texture index {textureIndex} -> primary: '{primaryName ?? fallbackName}', fallback: '{fallbackName}' (from {source})");
                         }
                     }
                 }
             }
 
-            UnityEngine.Debug.Log($"Found {textureIndexToNames.Count} texture mappings");
+            //UnityEngine.Debug.Log($"Found {textureIndexToNames.Count} texture mappings");
 
             // Step 2: Open BSA archive
             string bsaPath = System.IO.Path.Combine(Application.dataPath, "StreamingAssets", "Data", _bsa);
@@ -351,7 +351,7 @@ namespace ESMSharp.TES3Terrain
             {
                 bsaArchive = new BSASharp.BSA();
                 bsaArchive.Open(bsaPath);
-                UnityEngine.Debug.Log($"Opened BSA archive: {bsaPath}");
+                //UnityEngine.Debug.Log($"Opened BSA archive: {bsaPath}");
             }
             catch (System.Exception ex)
             {
@@ -394,7 +394,7 @@ namespace ESMSharp.TES3Terrain
                 }
             }
 
-            UnityEngine.Debug.Log($"Found {uniqueTextureIndices.Count} unique texture indices in land records");
+            //UnityEngine.Debug.Log($"Found {uniqueTextureIndices.Count} unique texture indices in land records");
 
             // Step 5: Extract textures from BSA
             int extractedCount = 0;
@@ -410,7 +410,7 @@ namespace ESMSharp.TES3Terrain
                 string lowerName = bsaFileName.ToLower();
                 if ((lowerName.Contains(".tga") || lowerName.Contains(".dds")) && sampleCount < 10)
                 {
-                    UnityEngine.Debug.Log($"Sample BSA texture path: '{bsaFileName}'");
+                    //UnityEngine.Debug.Log($"Sample BSA texture path: '{bsaFileName}'");
                     sampleCount++;
                 }
             }
@@ -442,7 +442,7 @@ namespace ESMSharp.TES3Terrain
                             alreadyCached = true;
                             cachedPngPath = pngPath;
                             extractedCount++;
-                            UnityEngine.Debug.Log($"Texture already cached as PNG: {baseNameNoExt}.png (skipping extraction)");
+                            //UnityEngine.Debug.Log($"Texture already cached as PNG: {baseNameNoExt}.png (skipping extraction)");
                             break;
                         }
                         
@@ -472,7 +472,7 @@ namespace ESMSharp.TES3Terrain
                                             if (ConvertDDSToPNG(fileData, pngPath))
                                             {
                                                 extractedCount++;
-                                                UnityEngine.Debug.Log($"Converted cached DDS to PNG: {baseNameNoExt}.dds -> {baseNameNoExt}.png");
+                                                //UnityEngine.Debug.Log($"Converted cached DDS to PNG: {baseNameNoExt}.dds -> {baseNameNoExt}.png");
                                                 alreadyCached = true;
                                                 cachedPngPath = pngPath;
                                                 break;
@@ -486,7 +486,7 @@ namespace ESMSharp.TES3Terrain
                                                 byte[] pngData = tempTexture.EncodeToPNG();
                                                 System.IO.File.WriteAllBytes(pngPath, pngData);
                                                 extractedCount++;
-                                                UnityEngine.Debug.Log($"Converted cached TGA to PNG: {baseNameNoExt}.tga -> {baseNameNoExt}.png");
+                                                //UnityEngine.Debug.Log($"Converted cached TGA to PNG: {baseNameNoExt}.tga -> {baseNameNoExt}.png");
                                                 UnityEngine.Object.DestroyImmediate(tempTexture);
                                                 #if UNITY_EDITOR
                                                 SetTextureImportSettings(pngPath);
@@ -500,7 +500,7 @@ namespace ESMSharp.TES3Terrain
                                     }
                                     catch (System.Exception ex)
                                     {
-                                        UnityEngine.Debug.LogWarning($"Failed to convert cached {ext} to PNG: {ex.Message}");
+                                        //UnityEngine.Debug.LogWarning($"Failed to convert cached {ext} to PNG: {ex.Message}");
                                     }
                                 }
                                 else
@@ -508,7 +508,7 @@ namespace ESMSharp.TES3Terrain
                                     // Already PNG or other format, skip
                                     alreadyCached = true;
                                     extractedCount++;
-                                    UnityEngine.Debug.Log($"Texture already cached: {baseNameNoExt}{ext} (skipping extraction)");
+                                    //UnityEngine.Debug.Log($"Texture already cached: {baseNameNoExt}{ext} (skipping extraction)");
                                     break;
                                 }
                             }
@@ -530,7 +530,7 @@ namespace ESMSharp.TES3Terrain
                             string baseFilename = System.IO.Path.GetFileName(textureName);
                             
                             // Debug: log what we're looking for
-                            UnityEngine.Debug.Log($"Looking for texture: '{textureName}' (base: '{baseFilename}')");
+                            //UnityEngine.Debug.Log($"Looking for texture: '{textureName}' (base: '{baseFilename}')");
                             
                             // Try multiple path variations
                             string[] pathVariations = new string[]
@@ -573,7 +573,7 @@ namespace ESMSharp.TES3Terrain
                                 {
                                     foundPath = bsaFileName;
                                     usedName = textureName;
-                                    UnityEngine.Debug.Log($"Found texture via search: '{baseFilename}' -> '{foundPath}'");
+                                    //UnityEngine.Debug.Log($"Found texture via search: '{baseFilename}' -> '{foundPath}'");
                                     break;
                                 }
                             }
@@ -589,7 +589,7 @@ namespace ESMSharp.TES3Terrain
                                 {
                                     foundPath = bsaFileName;
                                     usedName = textureName;
-                                    UnityEngine.Debug.Log($"Found texture via partial match: '{baseFilename}' -> '{foundPath}'");
+                                    //UnityEngine.Debug.Log($"Found texture via partial match: '{baseFilename}' -> '{foundPath}'");
                                     break;
                                 }
                             }
@@ -608,7 +608,7 @@ namespace ESMSharp.TES3Terrain
                                 continue;
                             }
                             
-                            UnityEngine.Debug.Log($"Extracting: {foundPath} (Size: {fileEntry.FileSize} bytes, Offset: {fileEntry.Offset})");
+                            //UnityEngine.Debug.Log($"Extracting: {foundPath} (Size: {fileEntry.FileSize} bytes, Offset: {fileEntry.Offset})");
                             byte[] fileData = bsaArchive.ExtractFile(foundPath);
                             
                             if (fileData == null || fileData.Length != fileEntry.FileSize)
@@ -644,7 +644,7 @@ namespace ESMSharp.TES3Terrain
                                     if (ConvertDDSToPNG(fileData, pngOutputPath))
                                     {
                                         extractedCount++;
-                                        UnityEngine.Debug.Log($"Extracted and converted DDS->PNG: {foundPath} -> {pngOutputPath}");
+                                        //UnityEngine.Debug.Log($"Extracted and converted DDS->PNG: {foundPath} -> {pngOutputPath}");
                                         #if UNITY_EDITOR
                                         SetTextureImportSettings(pngOutputPath);
                                         #endif
@@ -665,7 +665,7 @@ namespace ESMSharp.TES3Terrain
                                             System.IO.File.Delete(outputPath);
                                             UnityEditor.AssetDatabase.DeleteAsset(assetPath);
                                             extractedCount++;
-                                            UnityEngine.Debug.Log($"Extracted and converted DDS->PNG (via AssetDatabase): {foundPath} -> {pngOutputPath} ({tempTexture.width}x{tempTexture.height})");
+                                            //UnityEngine.Debug.Log($"Extracted and converted DDS->PNG (via AssetDatabase): {foundPath} -> {pngOutputPath} ({tempTexture.width}x{tempTexture.height})");
                                         }
                                         else
                                         {
@@ -703,7 +703,7 @@ namespace ESMSharp.TES3Terrain
                                         
                                         System.IO.File.WriteAllBytes(outputPath, pngData);
                                         extractedCount++;
-                                        UnityEngine.Debug.Log($"Extracted and converted TGA->PNG: {foundPath} -> {outputPath} ({tempTexture.width}x{tempTexture.height})");
+                                        //UnityEngine.Debug.Log($"Extracted and converted TGA->PNG: {foundPath} -> {outputPath} ({tempTexture.width}x{tempTexture.height})");
                                         #if UNITY_EDITOR
                                         SetTextureImportSettings(outputPath);
                                         #endif
@@ -730,7 +730,7 @@ namespace ESMSharp.TES3Terrain
                                 // Other formats (PNG, JPG, etc.) - save as-is
                                 System.IO.File.WriteAllBytes(outputPath, fileData);
                                 extractedCount++;
-                                UnityEngine.Debug.Log($"Extracted: {foundPath} -> {outputPath}");
+                                //UnityEngine.Debug.Log($"Extracted: {foundPath} -> {outputPath}");
                             }
                         }
                         else
@@ -811,7 +811,7 @@ namespace ESMSharp.TES3Terrain
                                         if (ConvertDDSToPNG(fileData, pngOutputPath))
                                         {
                                             extractedCount++;
-                                            UnityEngine.Debug.Log($"Copied and converted DDS->PNG from file system: {fileSystemPath} -> {pngOutputPath}");
+                                            //UnityEngine.Debug.Log($"Copied and converted DDS->PNG from file system: {fileSystemPath} -> {pngOutputPath}");
                                             #if UNITY_EDITOR
                                             SetTextureImportSettings(pngOutputPath);
                                             #endif
@@ -821,7 +821,7 @@ namespace ESMSharp.TES3Terrain
                                             // Copy DDS as-is if conversion fails
                                             System.IO.File.Copy(fileSystemPath, outputPath, true);
                                             extractedCount++;
-                                            UnityEngine.Debug.Log($"Copied DDS from file system: {fileSystemPath} -> {outputPath}");
+                                            //UnityEngine.Debug.Log($"Copied DDS from file system: {fileSystemPath} -> {outputPath}");
                                         }
                                     }
                                     else if (actualExtension == ".tga")
@@ -836,7 +836,7 @@ namespace ESMSharp.TES3Terrain
                                             string pngOutputPath = System.IO.Path.Combine(outputDir, pngFilename);
                                             System.IO.File.WriteAllBytes(pngOutputPath, pngData);
                                             extractedCount++;
-                                            UnityEngine.Debug.Log($"Copied and converted TGA->PNG from file system: {fileSystemPath} -> {pngOutputPath}");
+                                            //UnityEngine.Debug.Log($"Copied and converted TGA->PNG from file system: {fileSystemPath} -> {pngOutputPath}");
                                             #if UNITY_EDITOR
                                             SetTextureImportSettings(pngOutputPath);
                                             #endif
@@ -846,7 +846,7 @@ namespace ESMSharp.TES3Terrain
                                         {
                                             System.IO.File.Copy(fileSystemPath, outputPath, true);
                                             extractedCount++;
-                                            UnityEngine.Debug.Log($"Copied TGA from file system: {fileSystemPath} -> {outputPath}");
+                                            //UnityEngine.Debug.Log($"Copied TGA from file system: {fileSystemPath} -> {outputPath}");
                                             UnityEngine.Object.DestroyImmediate(tempTexture);
                                         }
                                     }
@@ -855,7 +855,7 @@ namespace ESMSharp.TES3Terrain
                                         // Copy other formats as-is
                                         System.IO.File.Copy(fileSystemPath, outputPath, true);
                                         extractedCount++;
-                                        UnityEngine.Debug.Log($"Copied from file system: {fileSystemPath} -> {outputPath}");
+                                        //UnityEngine.Debug.Log($"Copied from file system: {fileSystemPath} -> {outputPath}");
                                     }
                                 }
                                 catch (System.Exception ex)
@@ -868,7 +868,7 @@ namespace ESMSharp.TES3Terrain
                             {
                                 // Build list of names we tried for error message
                                 string triedNames = string.Join(", ", namesToTry.Select(n => $"'{n}'"));
-                                UnityEngine.Debug.LogWarning($"Texture not found in BSA or file system for index {textureIndex} (tried names: {triedNames})");
+                                //UnityEngine.Debug.LogWarning($"Texture not found in BSA or file system for index {textureIndex} (tried names: {triedNames})");
                                 failedCount++;
                             }
                         }
@@ -882,7 +882,7 @@ namespace ESMSharp.TES3Terrain
                 }
                 else
                 {
-                    UnityEngine.Debug.LogWarning($"No filename mapping found for texture index {textureIndex}");
+                    //UnityEngine.Debug.LogWarning($"No filename mapping found for texture index {textureIndex}");
                     failedCount++;
                 }
             }
@@ -893,7 +893,7 @@ namespace ESMSharp.TES3Terrain
                 bsaArchive.Close();
             }
 
-            UnityEngine.Debug.Log($"Texture extraction complete: {extractedCount} extracted, {failedCount} failed");
+            //UnityEngine.Debug.Log($"Texture extraction complete: {extractedCount} extracted, {failedCount} failed");
         }
 
         public void GenerateUnityTerrain(Record[] _records, string esm = "Morrowind", float terrainHeight = 256f, float waterY = 0f)
@@ -1001,7 +1001,7 @@ namespace ESMSharp.TES3Terrain
             // If we need to scale, use the chosen resolution
             if (heightmapWidth != actualHeightmapResolution || heightmapHeight != actualHeightmapResolution)
             {
-                UnityEngine.Debug.Log($"Scaling heightmap from {heightmapWidth}x{heightmapHeight} to {actualHeightmapResolution}x{actualHeightmapResolution} (Unity valid resolution)");
+                //UnityEngine.Debug.Log($"Scaling heightmap from {heightmapWidth}x{heightmapHeight} to {actualHeightmapResolution}x{actualHeightmapResolution} (Unity valid resolution)");
                 
                 // Scale the heightmap to the target square resolution using bilinear interpolation
                 float[,] scaledHeights = new float[actualHeightmapResolution, actualHeightmapResolution];
@@ -1045,13 +1045,13 @@ namespace ESMSharp.TES3Terrain
             // This ensures the terrain matches the cell grid placement
             terrainData.size = new Vector3(worldWidth, terrainHeight, worldHeight);
             
-            UnityEngine.Debug.Log($"Terrain dimensions: RAW file={rawWidth}x{rawHeight} (samples), World size={worldWidth}x{worldHeight} (units), Requested heightmap={heightmapWidth}x{heightmapHeight}, Actual heightmap resolution={actualHeightmapResolution}x{actualHeightmapResolution}, Terrain size={terrainData.size}, Cells={numCellsX}x{numCellsY}");
+            //UnityEngine.Debug.Log($"Terrain dimensions: RAW file={rawWidth}x{rawHeight} (samples), World size={worldWidth}x{worldHeight} (units), Requested heightmap={heightmapWidth}x{heightmapHeight}, Actual heightmap resolution={actualHeightmapResolution}x{actualHeightmapResolution}, Terrain size={terrainData.size}, Cells={numCellsX}x{numCellsY}");
             
             // Set heights (heights array is now square and matches actualHeightmapResolution)
             terrainData.SetHeights(0, 0, heights);
             
             // After setting heights, check what Unity actually reports
-            UnityEngine.Debug.Log($"After SetHeights: Heightmap resolution={terrainData.heightmapResolution}, Terrain size={terrainData.size}");
+            //UnityEngine.Debug.Log($"After SetHeights: Heightmap resolution={terrainData.heightmapResolution}, Terrain size={terrainData.size}");
 
             // Step 3: Build texture index to filename mapping (same as GatherLandTextures)
             // Store both NAME and DATA so we can try both when searching for extracted files
@@ -1279,11 +1279,11 @@ namespace ESMSharp.TES3Terrain
                                 if (!System.IO.File.Exists(pngPath))
                                 {
                                     // Convert DDS to PNG
-                                    UnityEngine.Debug.Log($"DDS file found but no PNG exists, converting: {texturePath}");
+                                    //UnityEngine.Debug.Log($"DDS file found but no PNG exists, converting: {texturePath}");
                                     byte[] ddsData = System.IO.File.ReadAllBytes(texturePath);
                                     if (ConvertDDSToPNG(ddsData, pngPath))
                                     {
-                                        UnityEngine.Debug.Log($"Successfully converted DDS to PNG: {texturePath} -> {pngPath}");
+                                        //UnityEngine.Debug.Log($"Successfully converted DDS to PNG: {texturePath} -> {pngPath}");
                                         #if UNITY_EDITOR
                                         SetTextureImportSettings(pngPath);
                                         #endif
@@ -1293,13 +1293,13 @@ namespace ESMSharp.TES3Terrain
                                     }
                                     else
                                     {
-                                        UnityEngine.Debug.LogWarning($"Failed to convert DDS to PNG: {texturePath}, will try to load DDS directly");
+                                        //UnityEngine.Debug.LogWarning($"Failed to convert DDS to PNG: {texturePath}, will try to load DDS directly");
                                     }
                                 }
                                 else
                                 {
                                     // PNG exists, use it instead
-                                    UnityEngine.Debug.Log($"PNG version exists, using PNG instead of DDS: {pngPath}");
+                                    //UnityEngine.Debug.Log($"PNG version exists, using PNG instead of DDS: {pngPath}");
                                     texturePath = pngPath;
                                     textureExtension = ".png";
                                     foundBaseName = System.IO.Path.GetFileName(pngPath);
@@ -1535,8 +1535,11 @@ namespace ESMSharp.TES3Terrain
                 
                 // Start position: each cell is 65 pixels, but spaced 64 apart
                 // The first cell starts at HALF (32) pixels from the origin
-                int startX = HALF + cellOffsetX;
-                int startY = HALF + cellOffsetY;
+                // Offset adjustment: splat map was one cell too far on Z (positive) and two cells too far on X (negative)
+                // Z positive = subtract from Y (since Y becomes Z after coordinate conversion)
+                // X negative = add to X (move forward in positive X direction)
+                int startX = HALF + cellOffsetX + (STEP/2)-2;  // Add 1 cells to fix X offset
+                int startY = HALF + cellOffsetY - (STEP/2)-2;         // Subtract 1 cell to fix Z offset
 
                 // Calculate scale factors: map from terrain coordinates (rawWidth x rawHeight) to alphamap coordinates
                 // Since the heightmap is now correctly scaled, we can use simple terrain-based scaling

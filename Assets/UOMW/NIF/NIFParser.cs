@@ -38,6 +38,9 @@ namespace ESMSharp.NIF
         // Per-mesh material and texture information
         public Dictionary<string, NIFTexture> Textures = new Dictionary<string, NIFTexture>();
         public NIFMaterial Material = new NIFMaterial();
+        
+        // Flag to indicate if this is a collision mesh (from RootCollisionNode or no material/texture)
+        public bool IsCollisionMesh = false;
     }
 
     /// <summary>

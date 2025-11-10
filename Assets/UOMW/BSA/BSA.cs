@@ -250,7 +250,9 @@ namespace BSASharp
 
                     // Validate file size and offset
                     if (entryFileSize == 0)
-                        UnityEngine.Debug.LogWarning($"BSA: File {i} has zero size");
+                    {
+                        //UnityEngine.Debug.LogWarning($"BSA: File {i} has zero size");
+                    }
                     
                     if (entryFileSize + offset > fileSize)
                         throw new InvalidDataException($"Archive contains offsets outside itself: file {i}, size {entryFileSize} + offset {offset} > fileSize {fileSize}");

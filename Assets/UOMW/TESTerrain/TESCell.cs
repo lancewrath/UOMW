@@ -34,7 +34,7 @@ namespace ESMSharp.TES3Terrain
         {
             if (RecordCell == null || _allRecords == null)
             {
-                UnityEngine.Debug.LogWarning($"TESCell: Cannot generate statics - missing RecordCell or records");
+                //UnityEngine.Debug.LogWarning($"TESCell: Cannot generate statics - missing RecordCell or records");
                 return;
             }
 
@@ -51,7 +51,7 @@ namespace ESMSharp.TES3Terrain
 
             if (isInterior)
             {
-                UnityEngine.Debug.Log($"TESCell: Skipping interior cell at ({GetGridX()}, {GetGridY()})");
+                //UnityEngine.Debug.Log($"TESCell: Skipping interior cell at ({GetGridX()}, {GetGridY()})");
                 return;
             }
 
@@ -62,7 +62,7 @@ namespace ESMSharp.TES3Terrain
             PlaceStatics placeStatics = new PlaceStatics(_esm, _bsa);
 
             // Place statics for this cell only
-            UnityEngine.Debug.Log($"TESCell: Generating statics for cell ({GetGridX()}, {GetGridY()})");
+            //UnityEngine.Debug.Log($"TESCell: Generating statics for cell ({GetGridX()}, {GetGridY()})");
             placeStatics.PlaceCellStatics(RecordCell, _allRecords, CellManager, transform, terrain);
 
             staticsGenerated = true;
