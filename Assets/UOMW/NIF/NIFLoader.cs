@@ -54,7 +54,7 @@ namespace ESMSharp.NIF
         /// Combines multiple NIF meshes into a single Unity mesh with submeshes
         /// Each submesh can have its own material/texture
         /// </summary>
-        private (Mesh mesh, Material[] materials) CombineMeshes(List<NIFMesh> meshes, float vertexScale = 1.0f, Quaternion rotation = default(Quaternion), string esm = "")
+        private (Mesh mesh, Material[] materials) CombineMeshes(List<NIFMesh> meshes, float vertexScale = 1.0f, Quaternion rotation = default(Quaternion), string esm = "", bool isTree = false)
         {
             if (meshes == null || meshes.Count == 0)
                 return (null, null);
@@ -146,7 +146,7 @@ namespace ESMSharp.NIF
                 }
 
                 // Create material for this submesh using per-mesh textures and material
-                Material submeshMat = CreateMaterialFromNIF(nifMesh.Material, nifMesh.Textures, esm);
+                Material submeshMat = CreateMaterialFromNIF(nifMesh.Material, nifMesh.Textures, esm, isTree: isTree);
                 submeshMaterials.Add(submeshMat);
 
                 vertexOffset += nifMesh.Vertices.Count;
@@ -258,9 +258,9 @@ namespace ESMSharp.NIF
         /// <summary>
         /// Creates a Unity material from NIF material and texture data
         /// </summary>
-        private Material CreateMaterialFromNIF(NIFMaterial nifMaterial, Dictionary<string, NIFTexture> textures, string esm)
+        private Material CreateMaterialFromNIF(NIFMaterial nifMaterial, Dictionary<string, NIFTexture> textures, string esm, bool isTree = false)
         {
-            Material material = CreateURPMaterial("NIFMaterial", null, null, nifMaterial.DiffuseColor);
+            Material material = CreateURPMaterial("NIFMaterial", null, null, nifMaterial.DiffuseColor, isTree: isTree);
             bool textureLoaded = false;
 
             // Load textures
@@ -274,7 +274,12 @@ namespace ESMSharp.NIF
                     if (diffuseTexture != null)
                     {
                         //UnityEngine.Debug.Log($"Successfully loaded texture: {baseTex.FilePath} ({diffuseTexture.width}x{diffuseTexture.height})");
-                        if (material.shader.name.Contains("Universal Render Pipeline"))
+                        if (isTree && (material.shader.name.Contains("Speedtree") || material.shader.name.Contains("SpeedTree") || material.shader.name.Contains("Nature")))
+                        {
+                            // URP/Nature/Speedtree9_URP or Nature shader uses _MainTex
+                            material.SetTexture("_MainTex", diffuseTexture);
+                        }
+                        else if (material.shader.name.Contains("Universal Render Pipeline"))
                         {
                             material.SetTexture("_BaseMap", diffuseTexture);
                         }
@@ -329,7 +334,41 @@ namespace ESMSharp.NIF
             }
 
             // Set material properties (only if texture was loaded)
-            if (material.shader.name.Contains("Universal Render Pipeline"))
+            if (isTree)
+            {
+                if (material.shader.name.Contains("Speedtree") || material.shader.name.Contains("SpeedTree") || material.shader.name.Contains("Nature"))
+                {
+                    // SpeedTree/Nature shader properties
+                    material.SetColor("_Color", nifMaterial.DiffuseColor);
+                    // Ensure alpha clipping is enabled for trees
+                    material.EnableKeyword("_ALPHATEST_ON");
+                    material.SetFloat("_Cutoff", 0.5f);
+                }
+                else if (material.shader.name.Contains("Universal Render Pipeline"))
+                {
+                    // URP Lit shader - use alpha clipping mode
+                    material.SetColor("_BaseColor", nifMaterial.DiffuseColor);
+                    material.SetFloat("_Metallic", 0.0f);
+                    material.SetFloat("_Smoothness", nifMaterial.Glossiness);
+                    
+                    // Enable alpha clipping for URP Lit
+                    material.SetFloat("_Surface", 0); // Opaque surface mode
+                    material.SetFloat("_AlphaClip", 1); // Enable alpha clipping
+                    material.SetFloat("_Cutoff", 0.5f); // Alpha threshold
+                    material.EnableKeyword("_ALPHATEST_ON");
+                    material.renderQueue = 2450; // AlphaTest queue
+                }
+                else
+                {
+                    // Standard shader fallback
+                    material.SetColor("_Color", nifMaterial.DiffuseColor);
+                    material.SetFloat("_Metallic", 0.0f);
+                    material.SetFloat("_Glossiness", nifMaterial.Glossiness);
+                    material.EnableKeyword("_ALPHATEST_ON");
+                    material.SetFloat("_Cutoff", 0.5f);
+                }
+            }
+            else if (material.shader.name.Contains("Universal Render Pipeline"))
             {
                 material.SetColor("_BaseColor", nifMaterial.DiffuseColor);
                 material.SetFloat("_Metallic", 0.0f);
@@ -672,22 +711,45 @@ namespace ESMSharp.NIF
         /// <summary>
         /// Creates a URP-compatible material for a NIF model
         /// </summary>
-        private Material CreateURPMaterial(string materialName, Texture2D diffuseTexture = null, Texture2D normalTexture = null, Color? diffuseColor = null)
+        private Material CreateURPMaterial(string materialName, Texture2D diffuseTexture = null, Texture2D normalTexture = null, Color? diffuseColor = null, bool isTree = false)
         {
-            // Try URP shaders first
-            Shader shader = Shader.Find("Universal Render Pipeline/Lit");
-            if (shader == null)
+            // For trees, use URP/Nature/Speedtree9_URP shader (required for proper billboarding/lighting in URP)
+            Shader shader = null;
+            if (isTree)
             {
-                shader = Shader.Find("Universal Render Pipeline/Simple Lit");
+                shader = Shader.Find("URP/Nature/Speedtree9_URP");
+                if (shader == null)
+                {
+                    // Fallback to alternative URP tree shader names
+                    shader = Shader.Find("Universal Render Pipeline/Nature/SpeedTree9");
+                }
+                if (shader == null)
+                {
+                    shader = Shader.Find("Nature/Soft Occlusion Leaves");
+                }
+                if (shader == null)
+                {
+                    UnityEngine.Debug.LogWarning("Could not find URP/Nature/Speedtree9_URP shader for tree. Falling back to URP Lit.");
+                }
             }
+            
+            // If not a tree or tree shader not found, try URP shaders
             if (shader == null)
             {
-                shader = Shader.Find("Universal Render Pipeline/Unlit");
-            }
-            if (shader == null)
-            {
-                // Fallback to Standard shader
-                shader = Shader.Find("Standard");
+                shader = Shader.Find("Universal Render Pipeline/Lit");
+                if (shader == null)
+                {
+                    shader = Shader.Find("Universal Render Pipeline/Simple Lit");
+                }
+                if (shader == null)
+                {
+                    shader = Shader.Find("Universal Render Pipeline/Unlit");
+                }
+                if (shader == null)
+                {
+                    // Fallback to Standard shader
+                    shader = Shader.Find("Standard");
+                }
             }
 
             if (shader == null)
@@ -699,9 +761,64 @@ namespace ESMSharp.NIF
             Material material = new Material(shader);
             material.name = materialName;
 
-            // Set URP properties
-            if (shader.name.Contains("Universal Render Pipeline"))
+            // Set shader properties based on shader type
+            if (isTree)
             {
+                if (shader.name.Contains("Speedtree") || shader.name.Contains("SpeedTree") || shader.name.Contains("Nature"))
+                {
+                    // URP/Nature/Speedtree9_URP or Nature shader properties
+                    if (diffuseTexture != null)
+                    {
+                        // SpeedTree9_URP uses _MainTex for diffuse
+                        material.SetTexture("_MainTex", diffuseTexture);
+                    }
+                    material.SetColor("_Color", diffuseColor ?? Color.white);
+                    // Tree shaders typically use _Cutoff for alpha cutoff
+                    material.SetFloat("_Cutoff", 0.5f);
+                    
+                    // Enable alpha clipping/cutout for trees to mask black areas in leaves
+                    // For SpeedTree shaders, enable the alpha test keyword
+                    material.EnableKeyword("_ALPHATEST_ON");
+                    material.DisableKeyword("_ALPHABLEND_ON");
+                    material.DisableKeyword("_ALPHAPREMULTIPLY_ON");
+                    
+                    // Set render queue to AlphaTest (2450) for proper rendering
+                    material.renderQueue = 2450;
+                }
+                else if (shader.name.Contains("Universal Render Pipeline"))
+                {
+                    // URP Lit shader fallback - enable alpha clipping
+                    if (diffuseTexture != null)
+                    {
+                        material.SetTexture("_BaseMap", diffuseTexture);
+                    }
+                    material.SetColor("_BaseColor", diffuseColor ?? Color.white);
+                    material.SetFloat("_Metallic", 0.0f);
+                    material.SetFloat("_Smoothness", 0.5f);
+                    
+                    // Enable alpha clipping for URP Lit
+                    material.SetFloat("_Surface", 0); // Opaque surface mode
+                    material.SetFloat("_AlphaClip", 1); // Enable alpha clipping
+                    material.SetFloat("_Cutoff", 0.5f); // Alpha threshold
+                    material.EnableKeyword("_ALPHATEST_ON");
+                    material.renderQueue = 2450; // AlphaTest queue
+                }
+                else
+                {
+                    // Standard shader fallback
+                    if (diffuseTexture != null)
+                    {
+                        material.SetTexture("_MainTex", diffuseTexture);
+                    }
+                    material.SetColor("_Color", diffuseColor ?? Color.white);
+                    material.EnableKeyword("_ALPHATEST_ON");
+                    material.SetFloat("_Cutoff", 0.5f);
+                    material.renderQueue = 2450;
+                }
+            }
+            else if (shader.name.Contains("Universal Render Pipeline"))
+            {
+                // URP shader properties
                 if (diffuseTexture != null)
                 {
                     material.SetTexture("_BaseMap", diffuseTexture);
@@ -831,8 +948,8 @@ namespace ESMSharp.NIF
                 if (combineMeshes)
                 {
                     // Combine all render meshes into a single mesh with submeshes (each with its own material)
-                    // Skip collision meshes for trees (they're not needed)
-                    var (combinedMesh, submeshMaterials) = CombineMeshes(renderMeshesList, vertexScale, meshRotation, _esm);
+                    // Exclude collision meshes from render mesh (they're not needed for rendering)
+                    var (combinedMesh, submeshMaterials) = CombineMeshes(renderMeshesList, vertexScale, meshRotation, _esm, isTree: true);
                     if (combinedMesh != null)
                     {
                         MeshFilter meshFilter = rootObj.AddComponent<MeshFilter>();
@@ -842,7 +959,20 @@ namespace ESMSharp.NIF
                         // Use sharedMaterials array for multiple materials (one per submesh)
                         meshRenderer.sharedMaterials = submeshMaterials;
                         
-                        //UnityEngine.Debug.Log($"Created combined NIF model (niflib.net): {filename} with {renderMeshesList.Count} render mesh(es) combined into {combinedMesh.subMeshCount} submesh(es) on root, {collisionMeshesList.Count} collision mesh(es) skipped");
+                        // Combine collision meshes into a single mesh for MeshCollider
+                        if (collisionMeshesList.Count > 0)
+                        {
+                            var (collisionMesh, _) = CombineMeshes(collisionMeshesList, vertexScale, meshRotation, _esm, isTree: false);
+                            if (collisionMesh != null)
+                            {
+                                MeshCollider meshCollider = rootObj.AddComponent<MeshCollider>();
+                                meshCollider.sharedMesh = collisionMesh;
+                                meshCollider.convex = false; // Trees typically use non-convex colliders
+                                //UnityEngine.Debug.Log($"Added MeshCollider to tree {filename} using {collisionMeshesList.Count} collision mesh(es)");
+                            }
+                        }
+                        
+                        //UnityEngine.Debug.Log($"Created combined NIF model (niflib.net): {filename} with {renderMeshesList.Count} render mesh(es) combined into {combinedMesh.subMeshCount} submesh(es) on root, {collisionMeshesList.Count} collision mesh(es) for collider");
                         return rootObj;
                     }
                 }
@@ -867,7 +997,7 @@ namespace ESMSharp.NIF
                     meshFilter.mesh = unityMesh;
                     
                     MeshRenderer meshRenderer = meshObj.AddComponent<MeshRenderer>();
-                    Material mat = CreateMaterialFromNIF(nifMesh.Material, nifMesh.Textures, _esm);
+                    Material mat = CreateMaterialFromNIF(nifMesh.Material, nifMesh.Textures, _esm, isTree: false);
                     meshRenderer.material = mat;
                 }
                 

@@ -24,6 +24,12 @@ namespace ESMSharp.TES3Terrain
         private BSA _bsaArchive = null;
         private Record[] _allRecords = null; // Store all records for VHGT lookup
 
+        // Distance-based LOD configuration (based on MWGE distant lands algorithm)
+        // These values determine which quadtree/distance category objects are placed in
+        public float FarStaticMinSize { get; set; } = 50f;      // Objects with radius <= this go to Near
+        public float VeryFarStaticMinSize { get; set; } = 200f; // Objects with radius <= this go to Far, else VeryFar
+        public float BuildingRadiusMultiplier { get; set; } = 2.0f; // Buildings get 2x radius multiplier
+
         public PlaceStatics(string esm = "Morrowind", string bsa = "Morrowind.bsa")
         {
             _esm = Path.GetFileNameWithoutExtension(esm);
@@ -32,10 +38,129 @@ namespace ESMSharp.TES3Terrain
         }
 
         /// <summary>
+        /// Static object distance categories (based on MWGE distant lands)
+        /// </summary>
+        public enum StaticDistanceCategory
+        {
+            Near,       // Close objects, always rendered
+            Far,        // Medium distance objects
+            VeryFar     // Distant objects, lowest detail
+        }
+
+        /// <summary>
         /// Places large static structures (buildings, ruins, etc.) from CELL records
+        /// Enhanced with distance-based categorization similar to MWGE distant lands
         /// </summary>
         public void PlaceLargeStructures(Record[] records, CellManager cellManager = null, Transform parent = null)
         {
+            // Track statistics
+            int nearCount = 0, farCount = 0, veryFarCount = 0;
+            int buildingCount = 0;
+
+            // First pass: categorize objects by distance
+            Dictionary<StaticDistanceCategory, List<(SubRecordCellREFP refp, float scale, SubRecordCellObjectID objectId, string modelFilename, int cellGridX, int cellGridY)>> categorizedObjects = 
+                new Dictionary<StaticDistanceCategory, List<(SubRecordCellREFP, float, SubRecordCellObjectID, string, int, int)>>();
+            categorizedObjects[StaticDistanceCategory.Near] = new List<(SubRecordCellREFP, float, SubRecordCellObjectID, string, int, int)>();
+            categorizedObjects[StaticDistanceCategory.Far] = new List<(SubRecordCellREFP, float, SubRecordCellObjectID, string, int, int)>();
+            categorizedObjects[StaticDistanceCategory.VeryFar] = new List<(SubRecordCellREFP, float, SubRecordCellObjectID, string, int, int)>();
+
+            // Iterate through cells and categorize objects
+            foreach (Record rec in records)
+            {
+                RecordCell cell = rec as RecordCell;
+                if (cell == null || cell.subRecords == null)
+                    continue;
+
+                // Skip interior cells
+                bool isInterior = false;
+                int cellGridX = 0, cellGridY = 0;
+                string cellName = "";
+
+                foreach (SubRecords subrec in cell.subRecords)
+                {
+                    if (subrec is SubRecordCellDATA data)
+                    {
+                        cellGridX = data.gridX;
+                        cellGridY = data.gridY;
+                        // Check if interior (flag 0x01)
+                        isInterior = (data.flags & 0x01) != 0;
+                    }
+                    else if (subrec is SubRecordCellNAME name && string.IsNullOrEmpty(cellName))
+                    {
+                        cellName = name.name;
+                        if (cellName.ToLower().Contains("interior"))
+                            isInterior = true;
+                    }
+                }
+
+                if (isInterior)
+                    continue;
+
+                // Process references in this cell
+                float currentScale = 1.0f;
+                SubRecordCellObjectID currentObjectId = null;
+
+                foreach (SubRecords subrec in cell.subRecords)
+                {
+                    if (subrec is SubRecordCellXSCL xscal)
+                    {
+                        currentScale = xscal.scale;
+                    }
+                    else if (subrec is SubRecordCellObjectID objectId)
+                    {
+                        currentObjectId = objectId;
+                    }
+                    else if (subrec is SubRecordCellREFP refp && currentObjectId != null)
+                    {
+                        // Find the model filename
+                        string modelFilename = FindModelFilename(currentObjectId.objectId, records);
+                        if (string.IsNullOrEmpty(modelFilename))
+                            continue;
+
+                        // Check if it's a large object
+                        string baseFilename = Path.GetFileNameWithoutExtension(modelFilename).ToLower();
+                        if (IsTreeModel(baseFilename) || IsGrassModel(baseFilename))
+                            continue;
+
+                        // Calculate bounding sphere radius
+                        float radius = CalculateBoundingSphereRadius(modelFilename, currentScale);
+                        
+                        // Determine if it's a building
+                        bool isBuilding = IsBuilding(baseFilename);
+                        if (isBuilding)
+                        {
+                            radius *= BuildingRadiusMultiplier;
+                            buildingCount++;
+                        }
+
+                        // Categorize by distance (based on MWGE algorithm)
+                        StaticDistanceCategory category;
+                        if (radius <= FarStaticMinSize)
+                        {
+                            category = StaticDistanceCategory.Near;
+                            nearCount++;
+                        }
+                        else if (radius <= VeryFarStaticMinSize)
+                        {
+                            category = StaticDistanceCategory.Far;
+                            farCount++;
+                        }
+                        else
+                        {
+                            category = StaticDistanceCategory.VeryFar;
+                            veryFarCount++;
+                        }
+
+                        categorizedObjects[category].Add((refp, currentScale, currentObjectId, modelFilename, cellGridX, cellGridY));
+                    }
+                }
+            }
+
+            // Log statistics
+            UnityEngine.Debug.Log($"PlaceLargeStructures: Categorized {nearCount} Near, {farCount} Far, {veryFarCount} VeryFar objects ({buildingCount} buildings)");
+
+            // Second pass: place objects by category
+            // For now, place all objects (we can add distance-based culling later)
             PlaceObjects(records, cellManager, parent, ObjectType.LargeStructures);
         }
 
@@ -44,23 +169,9 @@ namespace ESMSharp.TES3Terrain
         /// </summary>
         public void PlaceTrees(Record[] records, CellManager cellManager = null, Terrain terrain = null)
         {
-            // Clear tree instances list for this placement session
-            _treeInstances.Clear();
-            
+            // Place trees as static meshes (not terrain tree instances)
+            // Trees will be placed using the same logic as statics, but with SpeedTree shader
             PlaceObjects(records, cellManager, null, ObjectType.Trees, terrain);
-            
-            // Apply all tree instances to terrain at once (more efficient)
-            if (terrain != null && terrain.terrainData != null && _treeInstances.Count > 0)
-            {
-                TerrainData terrainData = terrain.terrainData;
-                TreeInstance[] existingTrees = terrainData.treeInstances;
-                TreeInstance[] allTrees = new TreeInstance[existingTrees.Length + _treeInstances.Count];
-                System.Array.Copy(existingTrees, allTrees, existingTrees.Length);
-                System.Array.Copy(_treeInstances.ToArray(), 0, allTrees, existingTrees.Length, _treeInstances.Count);
-                terrainData.treeInstances = allTrees;
-                
-                //UnityEngine.Debug.Log($"Added {_treeInstances.Count} tree instances to terrain (total: {allTrees.Length}, unique prototypes: {_treePrototypes.Count})");
-            }
         }
 
         /// <summary>
@@ -502,205 +613,162 @@ namespace ESMSharp.TES3Terrain
         /// <summary>
         /// Places a tree as a Unity terrain tree
         /// </summary>
-        private bool PlaceTree(string modelFilename, SubRecordCellREFP refp, float scale, SubRecordCellObjectID objectId, Terrain terrain, int cellGridX, int cellGridY)
+        private bool PlaceTree(string modelFilename, SubRecordCellREFP refp, float scale, SubRecordCellObjectID objectId, Terrain terrain, int cellGridX, int cellGridY, Transform parent = null)
         {
-            if (terrain == null || terrain.terrainData == null)
-            {
-                return false;
-            }
-
             try
             {
                 // Strip any subdirectory paths from filename (use just the base filename)
                 string baseFilename = Path.GetFileName(modelFilename);
                 
-                // Get or create tree prototype (reuse if already loaded)
-                TreePrototype treePrototype = null;
-                int prototypeIndex = -1;
-                
-                if (!_treePrototypes.TryGetValue(baseFilename, out treePrototype))
+                // Check if we've already loaded this model (mesh instancing)
+                GameObject templateModel = null;
+                if (_loadedModels.TryGetValue(baseFilename, out templateModel))
                 {
-                    // Load the NIF model with meshes combined (required for Unity terrain trees)
-                    GameObject treeModel = _nifLoader.LoadNIFFromCache(baseFilename, combineMeshes: true);
-                    if (treeModel == null)
-                    {
-                        //UnityEngine.Debug.LogWarning($"Failed to load tree model: {baseFilename}");
-                        return false;
-                    }
-
-                    // Create tree prototype from the model
-                    treePrototype = CreateTreePrototypeFromModel(treeModel, baseFilename);
-                    if (treePrototype == null)
-                    {
-                        //UnityEngine.Debug.LogWarning($"Failed to create tree prototype from: {baseFilename}");
-                        return false;
-                    }
-
-                    // Add prototype to terrain data
-                    TerrainData terrainData = terrain.terrainData;
-                    TreePrototype[] existingPrototypes = terrainData.treePrototypes;
-                    TreePrototype[] newPrototypes = new TreePrototype[existingPrototypes.Length + 1];
-                    System.Array.Copy(existingPrototypes, newPrototypes, existingPrototypes.Length);
-                    newPrototypes[existingPrototypes.Length] = treePrototype;
-                    terrainData.treePrototypes = newPrototypes;
+                    // Instantiate the existing model instead of loading again
+                    GameObject instanceObj = GameObject.Instantiate(templateModel);
+                    instanceObj.name = templateModel.name; // Unity adds "(Clone)" automatically
                     
-                    prototypeIndex = existingPrototypes.Length;
-                    _treePrototypes[baseFilename] = treePrototype;
+                    // Use the same coordinate conversion as PlaceStaticObject
+                    const float TREE_MORROWIND_TO_TERRAIN_SCALE = 64f / 8192f; // 0.0078125
                     
-                    //UnityEngine.Debug.Log($"Created tree prototype for: {baseFilename} (index {prototypeIndex})");
+                    // REFP coordinates in Morrowind are stored as (X, Z, Y) not (X, Y, Z)
+                    float instanceScaledX = refp.x * TREE_MORROWIND_TO_TERRAIN_SCALE;
+                    float instanceScaledZ = refp.y * TREE_MORROWIND_TO_TERRAIN_SCALE; // Use refp.y for Z (North coordinate)
+                    float instanceScaledY = refp.z * TREE_MORROWIND_TO_TERRAIN_SCALE; // Use refp.z for Y (Height coordinate)
+                    
+                    Vector3 instancePosition = new Vector3(
+                        instanceScaledX,      // X position in world space
+                        instanceScaledY,      // Y position (height) from REFP coordinates
+                        instanceScaledZ       // Z position in world space (no negation)
+                    );
+                    
+                    // Convert Morrowind rotation to Unity rotation (same as statics)
+                    Quaternion instanceRotation = Quaternion.Euler(
+                        -refp.yaw * Mathf.Rad2Deg,    // Yaw -> X
+                        -refp.pitch * Mathf.Rad2Deg,  // Pitch -> Y
+                        -refp.roll * Mathf.Rad2Deg    // Roll -> Z
+                    );
+                    
+                    // Set position, rotation, scale BEFORE parenting
+                    instanceObj.transform.position = instancePosition;
+                    instanceObj.transform.rotation = instanceRotation;
+                    
+                    // XSCL scale multiplies the base GameObject scale (same as statics)
+                    Vector3 instanceBaseScale = new Vector3(TREE_MORROWIND_TO_TERRAIN_SCALE, TREE_MORROWIND_TO_TERRAIN_SCALE, TREE_MORROWIND_TO_TERRAIN_SCALE);
+                    // Apply XSCL scale (handle negative scales like statics)
+                    if (scale < 0)
+                    {
+                        // Negative scale = mirror object (use absolute value)
+                        instanceObj.transform.localScale = instanceBaseScale * Mathf.Abs(scale);
+                    }
+                    else
+                    {
+                        // Positive scale = normal scaling
+                        instanceObj.transform.localScale = instanceBaseScale * scale;
+                    }
+                    
+                    // Set name
+                    if (objectId != null && !string.IsNullOrEmpty(objectId.objectId))
+                    {
+                        instanceObj.name = objectId.objectId.TrimEnd('\0');
+                    }
+                    
+                    // Apply reflection fix: negate Z scale and negate Yaw (same as statics)
+                    Vector3 instanceCurrentScale = instanceObj.transform.localScale;
+                    instanceObj.transform.localScale = new Vector3(instanceCurrentScale.x, instanceCurrentScale.y, -instanceCurrentScale.z);
+                    
+                    // Negate Yaw (Y rotation)
+                    Vector3 instanceEuler = instanceObj.transform.rotation.eulerAngles;
+                    float instanceYaw = instanceEuler.y;
+                    if (instanceYaw > 180f) instanceYaw -= 360f;
+                    instanceObj.transform.rotation = Quaternion.Euler(instanceEuler.x, -instanceYaw, instanceEuler.z);
+                    
+                    // Add LOD component
+                    AddLODToObject(instanceObj);
+                    
+                    // Parent to cell or specified parent (same as statics)
+                    if (parent != null)
+                    {
+                        instanceObj.transform.SetParent(parent, worldPositionStays: true);
+                    }
+                    
+                    return true;
+                }
+                
+                // Load the NIF model with meshes combined (for trees)
+                GameObject treeModel = _nifLoader.LoadNIFFromCache(baseFilename, combineMeshes: true);
+                if (treeModel == null)
+                {
+                    //UnityEngine.Debug.LogWarning($"Failed to load tree model: {baseFilename}");
+                    return false;
+                }
+                
+                // Store the loaded model for future instancing (keep it active for instancing)
+                _loadedModels[baseFilename] = treeModel;
+                
+                // Use the same coordinate conversion as PlaceStaticObject
+                const float MORROWIND_TO_TERRAIN_SCALE = 64f / 8192f; // 0.0078125
+                
+                // REFP coordinates in Morrowind are stored as (X, Z, Y) not (X, Y, Z)
+                float scaledX = refp.x * MORROWIND_TO_TERRAIN_SCALE;
+                float scaledZ = refp.y * MORROWIND_TO_TERRAIN_SCALE; // Use refp.y for Z (North coordinate)
+                float scaledY = refp.z * MORROWIND_TO_TERRAIN_SCALE; // Use refp.z for Y (Height coordinate)
+                
+                Vector3 unityPosition = new Vector3(
+                    scaledX,      // X position in world space
+                    scaledY,      // Y position (height) from REFP coordinates
+                    scaledZ       // Z position in world space (no negation)
+                );
+                
+                // Convert Morrowind rotation to Unity rotation (same as statics)
+                Quaternion unityRotation = Quaternion.Euler(
+                    -refp.yaw * Mathf.Rad2Deg,    // Yaw -> X
+                    -refp.pitch * Mathf.Rad2Deg,  // Pitch -> Y
+                    -refp.roll * Mathf.Rad2Deg    // Roll -> Z
+                );
+                
+                // Set position and rotation BEFORE parenting
+                treeModel.transform.position = unityPosition;
+                treeModel.transform.rotation = unityRotation;
+                
+                // XSCL scale multiplies the base GameObject scale (same as statics)
+                Vector3 modelBaseScale = treeModel.transform.localScale;
+                // Apply XSCL scale (handle negative scales like statics)
+                if (scale < 0)
+                {
+                    // Negative scale = mirror object (use absolute value)
+                    treeModel.transform.localScale = modelBaseScale * Mathf.Abs(scale);
                 }
                 else
                 {
-                    // Find the prototype index in terrain data
-                    TreePrototype[] prototypes = terrain.terrainData.treePrototypes;
-                    for (int i = 0; i < prototypes.Length; i++)
-                    {
-                        if (prototypes[i] == treePrototype)
-                        {
-                            prototypeIndex = i;
-                            break;
-                        }
-                    }
-                    
-                    if (prototypeIndex == -1)
-                    {
-                        //UnityEngine.Debug.LogWarning($"Tree prototype not found in terrain data: {baseFilename}");
-                        return false;
-                    }
+                    // Positive scale = normal scaling
+                    treeModel.transform.localScale = modelBaseScale * scale;
                 }
-
-                // Convert Morrowind position to terrain-relative position (0-1 range)
-                // According to MWSE docs: https://mwse.github.io/MWSE/references/general/game-units/
-                // - Exterior cells are 8192 x 8192 units in Morrowind's world coordinate system
-                // - REFP coordinates are WORLD coordinates in Morrowind's coordinate system
-                // - Our terrain uses 64 units per cell (STEP = 64)
-                // - Scale factor: 64 / 8192 = 1/128 to convert from Morrowind world to terrain world
-                // Morrowind coordinates: X=East, Y=Up, Z=North
-                // Unity terrain: X=East, Y=Up, Z=South (flipped)
-                // Terrain is positioned at (-cell0X, 0, -cell0Z) where cell0X/cell0Z are calculated to align cell (0,0) at world (0,0,0)
                 
-                // Scale factor to convert from Morrowind world coordinates (8192 units/cell) to terrain coordinates (64 units/cell)
-                const float MORROWIND_TO_TERRAIN_SCALE = 64f / 8192f; // = 1/128 = 0.0078125
-                
-                // REFP coordinates in Morrowind are stored as (X, Z, Y) not (X, Y, Z)
-                // refp.x = Morrowind X (East)
-                // refp.y = Morrowind Z (North) - this is the horizontal coordinate we need for Unity Z
-                // refp.z = Morrowind Y (Up/Height) - this is the vertical coordinate
-                // Scale them to match our terrain coordinate system (64 units per cell)
-                Vector3 morrowindWorldPos = new Vector3(
-                    refp.x * MORROWIND_TO_TERRAIN_SCALE,  // East (scaled to terrain units)
-                    refp.z,                                // Up (height, doesn't need scaling)
-                    refp.y * MORROWIND_TO_TERRAIN_SCALE    // North (scaled to terrain units) - using refp.y for Z
-                );
-                
-                // Validate coordinates - skip if Y (height) is way too high (likely invalid or interior cell)
-                // Morrowind terrain height is typically 0-1000, so values > 10000 are likely invalid
-                // Note: refp.z is the Y/Height coordinate in REFP format
-                if (Mathf.Abs(refp.z) > 10000f)
+                // Set name
+                if (objectId != null && !string.IsNullOrEmpty(objectId.objectId))
                 {
-                    if (_treeInstances.Count < 5)
-                    {
-                        //UnityEngine.Debug.LogWarning($"Tree has invalid Y coordinate (likely interior cell or corrupted data): " +
-                        //    $"cell=({cellGridX},{cellGridY}), refp.z={refp.z} (Y/Height)");
-                    }
-                    return false;
+                    treeModel.name = objectId.objectId.TrimEnd('\0');
                 }
                 
-                // Get terrain bounds and position
-                // NOTE: terrain.transform.position is calculated dynamically in GenerateUnityTerrain based on MinCellX/MinCellY
-                // It's positioned at (-cell0X, 0, -cell0Z) where:
-                //   cell0X = Math.Abs(MinCellX) * STEP + HALF
-                //   cell0Z = Math.Abs(MinCellY) * STEP + HALF
-                // This ensures cell (0,0) is at world origin (0,0,0) regardless of the map's cell bounds
-                Vector3 terrainPosition = terrain.transform.position;
-                Vector3 terrainSize = terrain.terrainData.size;
+                // Apply reflection fix: negate Z scale and negate Yaw (same as statics)
+                Vector3 currentScale = treeModel.transform.localScale;
+                treeModel.transform.localScale = new Vector3(currentScale.x, currentScale.y, -currentScale.z);
                 
-                // Convert to Unity world coordinates (flip Z: Morrowind Z=North becomes Unity Z=-South)
-                // Account for terrain position offset
-                Vector3 unityWorldPosition = new Vector3(
-                    morrowindWorldPos.x + terrainPosition.x,  // Account for terrain offset
-                    morrowindWorldPos.y,                      // Y will be set to 0 for terrain surface
-                    -morrowindWorldPos.z + terrainPosition.z // Flip Z and account for terrain offset
-                );
+                // Negate Yaw (Y rotation)
+                Vector3 euler = treeModel.transform.rotation.eulerAngles;
+                float yaw = euler.y;
+                if (yaw > 180f) yaw -= 360f;
+                treeModel.transform.rotation = Quaternion.Euler(euler.x, -yaw, euler.z);
                 
-                // Convert Unity world position to terrain-relative position (0-1)
-                // Account for terrain offset by subtracting the terrain position to get terrain-local coordinates
-                // This works for any map because we're using the actual terrain position, not hardcoded values
-                float normalizedX = (unityWorldPosition.x - terrainPosition.x) / terrainSize.x;
-                float normalizedZ = (unityWorldPosition.z - terrainPosition.z) / terrainSize.z;
+                // Add LOD component
+                AddLODToObject(treeModel);
                 
-                // Validate that the tree is within terrain bounds
-                // Skip trees that are way outside the terrain (likely invalid coordinates or interior cells that slipped through)
-                if (normalizedX < -0.1f || normalizedX > 1.1f || normalizedZ < -0.1f || normalizedZ > 1.1f)
+                // Parent to cell or specified parent (same as statics)
+                if (parent != null)
                 {
-                    if (_treeInstances.Count < 5)
-                    {
-                        //UnityEngine.Debug.LogWarning($"Tree outside terrain bounds, skipping: normalized=({normalizedX},{normalizedZ}), " +
-                        //    $"world=({unityWorldPosition.x},{unityWorldPosition.z}), terrain bounds=({terrainPosition.x} to {terrainPosition.x + terrainSize.x}, " +
-                        //    $"{terrainPosition.z} to {terrainPosition.z + terrainSize.z})");
-                    }
-                    return false;
+                    treeModel.transform.SetParent(parent, worldPositionStays: true);
                 }
-                
-                // Clamp to terrain bounds (allow slight overflow for edge cases)
-                normalizedX = Mathf.Clamp01(normalizedX);
-                normalizedZ = Mathf.Clamp01(normalizedZ);
-                
-                // Get terrain height at this position (in world space)
-                // Unity's SampleHeight returns the height in world space
-                float terrainHeight = terrain.SampleHeight(unityWorldPosition);
-                
-                // For TreeInstance.position, Y should be the normalized height offset from terrain base
-                // Trees should always be placed on the terrain surface
-                // terrainHeight is in world space, so we need to convert it to normalized (0-1) relative to terrain base
-                float heightOffset = (terrainHeight - terrainPosition.y) / terrainSize.y; // Normalized height (0 = base, 1 = top)
-                
-                // Debug log for first few trees to verify placement
-                if (_treeInstances.Count < 5)
-                {
-                    // Calculate expected cell position in Unity world coordinates (accounting for terrain offset)
-                    float expectedCellX = cellGridX * 64f + terrainPosition.x; // Each cell is 64 units, plus terrain offset
-                    float expectedCellZ = cellGridY * 64f + terrainPosition.z;
-                    
-                    //UnityEngine.Debug.Log($"Tree placement: cell=({cellGridX},{cellGridY}), " +
-                    //    $"refp(REFP format: X={refp.x}, Z={refp.y}, Y={refp.z}), " +
-                    //    $"scaleFactor={MORROWIND_TO_TERRAIN_SCALE}, " +
-                    //    $"morrowindWorld(scaled)=({morrowindWorldPos.x},{morrowindWorldPos.y},{morrowindWorldPos.z}), " +
-                    //    $"unityWorld=({unityWorldPosition.x},{unityWorldPosition.y},{unityWorldPosition.z}), " +
-                    //    $"terrainPos=({terrainPosition.x},{terrainPosition.y},{terrainPosition.z}), " +
-                    //    $"terrainSize=({terrainSize.x},{terrainSize.y},{terrainSize.z}), " +
-                    //    $"normalized=({normalizedX},{normalizedZ}), " +
-                    //    $"terrainHeight={terrainHeight}, " +
-                    //    $"heightOffset(normalized)={heightOffset}, " +
-                    //    $"treeInstancePos=({normalizedX},{heightOffset},{normalizedZ}), " +
-                    //    $"expectedCellCenter=({expectedCellX},{expectedCellZ})");
-                }
-                
-                // Create tree instance
-                TreeInstance treeInstance = new TreeInstance();
-                treeInstance.prototypeIndex = prototypeIndex;
-                treeInstance.position = new Vector3(normalizedX, heightOffset, normalizedZ); // Y is normalized height on terrain
-                treeInstance.widthScale = scale;
-                treeInstance.heightScale = scale;
-                treeInstance.color = Color.white;
-                treeInstance.lightmapColor = Color.white;
-                
-                // Convert Morrowind rotation to tree rotation
-                // Trees in Unity terrain use rotation around Y axis (in radians)
-                float rotationY = refp.yaw * Mathf.Deg2Rad;
-                treeInstance.rotation = rotationY;
-                
-                // Debug: Log tree instance details for first few trees
-                //if (_treeInstances.Count < 5)
-                //{
-                //    UnityEngine.Debug.Log($"Tree instance created: prototypeIndex={prototypeIndex}, " +
-                //        $"position=({treeInstance.position.x},{treeInstance.position.y},{treeInstance.position.z}), " +
-                //        $"widthScale={treeInstance.widthScale}, heightScale={treeInstance.heightScale}, " +
-                //        $"rotation={treeInstance.rotation} (yaw={refp.yaw}°), " +
-                //        $"prototype valid={treePrototype != null}, prefab={treePrototype?.prefab?.name ?? "null"}");
-                //}
-                
-                _treeInstances.Add(treeInstance);
                 
                 return true;
             }
@@ -767,6 +835,9 @@ namespace ESMSharp.TES3Terrain
             TreePrototype prototype = new TreePrototype();
             prototype.prefab = treeModel; // Unity will use the prefab for rendering
             prototype.bendFactor = 0.0f; // Trees don't bend in Morrowind
+            
+            // Keep the prototype GameObject active (we're now placing trees as static meshes, not terrain trees)
+            // The model will be used for instancing
             
             //UnityEngine.Debug.Log($"Created tree prototype for {modelName}: {meshFilter.sharedMesh.vertexCount} vertices, {meshFilter.sharedMesh.triangles.Length / 3} triangles");
             
@@ -907,9 +978,11 @@ namespace ESMSharp.TES3Terrain
 
             // Place the object based on type
             bool success = false;
-            if (objectType == ObjectType.Trees && terrain != null)
+            if (objectType == ObjectType.Trees)
             {
-                success = PlaceTree(modelFilename, refp, scale, objectId, terrain, cellGridX, cellGridY);
+                // Place trees as static meshes (same as statics, but with SpeedTree shader)
+                Transform refParent = cellParent != null ? cellParent.transform : parent;
+                success = PlaceTree(modelFilename, refp, scale, objectId, terrain, cellGridX, cellGridY, refParent);
             }
             else if (objectType == ObjectType.Grass && terrain != null)
             {
@@ -937,9 +1010,13 @@ namespace ESMSharp.TES3Terrain
         private bool IsTreeModel(string baseFilename)
         {
             // Common tree-related keywords in Morrowind
+            // Includes "parasol" for giant mushrooms (e.g., flora_emp_parasol)
             return baseFilename.Contains("tree") || 
                    baseFilename.Contains("Tree") ||
                    baseFilename.Contains("TREE") ||
+                   baseFilename.Contains("parasol") ||
+                   baseFilename.Contains("Parasol") ||
+                   baseFilename.Contains("PARASOL") ||
                    baseFilename.Contains("flora_tree") ||
                    baseFilename.Contains("flora_bush") ||
                    baseFilename.Contains("flora_plant");
@@ -986,6 +1063,190 @@ namespace ESMSharp.TES3Terrain
 
             // If none of the above, it's likely a small detail mesh - skip it
             return false;
+        }
+
+        /// <summary>
+        /// Calculates the bounding sphere radius for a model (post-transform, including scale)
+        /// Based on MWGE's distant lands algorithm
+        /// </summary>
+        private float CalculateBoundingSphereRadius(string modelFilename, float scale)
+        {
+            try
+            {
+                // Try to get the mesh bounds from a loaded model
+                string baseFilename = Path.GetFileName(modelFilename);
+                GameObject model = null;
+
+                // Check if already loaded
+                if (_loadedModels.TryGetValue(baseFilename, out model))
+                {
+                    return GetBoundingSphereRadiusFromGameObject(model, scale);
+                }
+
+                // Try to load the model temporarily
+                GameObject tempModel = _nifLoader.LoadNIFFromCache(baseFilename);
+                if (tempModel != null)
+                {
+                    float radius = GetBoundingSphereRadiusFromGameObject(tempModel, scale);
+                    // Don't store it if it wasn't already stored (to avoid polluting cache)
+                    if (!_loadedModels.ContainsKey(baseFilename))
+                    {
+                        UnityEngine.Object.DestroyImmediate(tempModel);
+                    }
+                    return radius;
+                }
+
+                // Fallback: estimate based on filename or return default
+                // Large objects (buildings) are typically larger
+                string baseName = Path.GetFileNameWithoutExtension(modelFilename).ToLower();
+                if (IsBuilding(baseName))
+                {
+                    return 100f * scale; // Default building size
+                }
+                else if (baseName.StartsWith("ex_"))
+                {
+                    return 50f * scale; // Default exterior object size
+                }
+
+                return 25f * scale; // Default small object size
+            }
+            catch (Exception ex)
+            {
+                UnityEngine.Debug.LogWarning($"Error calculating bounding sphere radius for {modelFilename}: {ex.Message}");
+                return 25f * scale; // Default fallback
+            }
+        }
+
+        /// <summary>
+        /// Gets bounding sphere radius from a GameObject's mesh bounds
+        /// </summary>
+        private float GetBoundingSphereRadiusFromGameObject(GameObject obj, float scale)
+        {
+            if (obj == null)
+                return 0f;
+
+            Bounds combinedBounds = new Bounds();
+            bool boundsInitialized = false;
+
+            // Get bounds from all MeshRenderers
+            MeshRenderer[] renderers = obj.GetComponentsInChildren<MeshRenderer>();
+            foreach (MeshRenderer renderer in renderers)
+            {
+                if (renderer.bounds.size.magnitude > 0)
+                {
+                    if (!boundsInitialized)
+                    {
+                        combinedBounds = renderer.bounds;
+                        boundsInitialized = true;
+                    }
+                    else
+                    {
+                        combinedBounds.Encapsulate(renderer.bounds);
+                    }
+                }
+            }
+
+            // If no renderers, try MeshFilters
+            if (!boundsInitialized)
+            {
+                MeshFilter[] filters = obj.GetComponentsInChildren<MeshFilter>();
+                foreach (MeshFilter filter in filters)
+                {
+                    if (filter.sharedMesh != null)
+                    {
+                        Bounds meshBounds = filter.sharedMesh.bounds;
+                        // Transform bounds to world space
+                        Bounds worldBounds = new Bounds(
+                            obj.transform.TransformPoint(meshBounds.center),
+                            Vector3.Scale(meshBounds.size, obj.transform.lossyScale)
+                        );
+
+                        if (!boundsInitialized)
+                        {
+                            combinedBounds = worldBounds;
+                            boundsInitialized = true;
+                        }
+                        else
+                        {
+                            combinedBounds.Encapsulate(worldBounds);
+                        }
+                    }
+                }
+            }
+
+            if (!boundsInitialized)
+                return 25f * scale; // Default fallback
+
+            // Calculate radius from bounds (half the diagonal)
+            float radius = combinedBounds.size.magnitude * 0.5f;
+            
+            // Apply scale
+            radius *= scale;
+
+            return radius;
+        }
+
+        /// <summary>
+        /// Determines if an object is a building (for radius multiplier)
+        /// </summary>
+        private bool IsBuilding(string baseFilename)
+        {
+            string lower = baseFilename.ToLower();
+            
+            // Buildings typically have these keywords
+            string[] buildingKeywords = new string[]
+            {
+                "building", "house", "mansion", "ruin", "ruins",
+                "lighthouse", "stronghold", "fort", "fortress",
+                "castle", "keep", "tower", "temple", "shrine"
+            };
+
+            foreach (string keyword in buildingKeywords)
+            {
+                if (lower.Contains(keyword))
+                    return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Finds the model filename for a given object ID
+        /// </summary>
+        private string FindModelFilename(string objectId, Record[] allRecords)
+        {
+            if (string.IsNullOrEmpty(objectId) || allRecords == null)
+                return null;
+
+            // Search STAT records
+            foreach (Record rec in allRecords)
+            {
+                RecordStat stat = rec as RecordStat;
+                if (stat != null && stat.subRecords != null)
+                {
+                    string statName = null;
+                    string statModl = null;
+
+                    foreach (SubRecords subrec in stat.subRecords)
+                    {
+                        if (subrec is SubRecordStatNAME name)
+                        {
+                            statName = name.name?.TrimEnd('\0');
+                        }
+                        else if (subrec is SubRecordStatMODL modl)
+                        {
+                            statModl = modl.model?.TrimEnd('\0');
+                        }
+                    }
+
+                    if (statName != null && statName.Equals(objectId.TrimEnd('\0'), StringComparison.OrdinalIgnoreCase))
+                    {
+                        return statModl;
+                    }
+                }
+            }
+
+            return null;
         }
 
         /// <summary>
@@ -1279,10 +1540,14 @@ namespace ESMSharp.TES3Terrain
         }
 
         /// <summary>
-        /// Adds LOD component to an object and all its children with renderers
+        /// Adds LOD support to a static object, including Unity LOD Group with decimated meshes
         /// </summary>
         private void AddLODToObject(GameObject obj)
         {
+            // Check if we should create Unity LOD Groups (requires meshes to be decimated)
+            // For now, we'll use the simple distance-based culling
+            // Unity LOD Groups can be added later when decimated meshes are generated
+            
             // Add LOD to root if it has a renderer
             if (obj.GetComponent<Renderer>() != null)
             {
@@ -1310,6 +1575,28 @@ namespace ESMSharp.TES3Terrain
                     }
                 }
             }
+
+            // TODO: Create Unity LOD Group with decimated meshes
+            // This would require:
+            // 1. Generating LOD meshes using MeshDecimation.CreateLODLevels()
+            // 2. Creating LOD Group component
+            // 3. Assigning renderers to each LOD level
+            // Example:
+            // LODGroup lodGroup = obj.GetComponent<LODGroup>();
+            // if (lodGroup == null)
+            // {
+            //     MeshFilter meshFilter = obj.GetComponent<MeshFilter>();
+            //     if (meshFilter != null && meshFilter.sharedMesh != null)
+            //     {
+            //         int[] lodTriangles = new int[] { 
+            //             meshFilter.sharedMesh.triangles.Length / 3,  // LOD0: full detail
+            //             (meshFilter.sharedMesh.triangles.Length / 3) / 2,  // LOD1: 50%
+            //             (meshFilter.sharedMesh.triangles.Length / 3) / 4   // LOD2: 25%
+            //         };
+            //         Mesh[] lodMeshes = MeshDecimation.CreateLODLevels(meshFilter.sharedMesh, lodTriangles);
+            //         // Create LOD Group and assign meshes...
+            //     }
+            // }
         }
     }
 }

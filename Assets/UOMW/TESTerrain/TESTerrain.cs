@@ -1515,8 +1515,8 @@ namespace ESMSharp.TES3Terrain
             
             // Calculate offset to account for terrain starting at (0,0) instead of center
             // If MinCellX is negative, we need to shift the coordinate system
-            int terrainOffsetX = Math.Abs(Convert.ToInt32(MinCellX)) * CELL;
-            int terrainOffsetY = Math.Abs(Convert.ToInt32(MinCellY)) * CELL;
+            int terrainOffsetX = (Math.Abs(Convert.ToInt32(MinCellX)) * CELL);
+            int terrainOffsetY = (Math.Abs(Convert.ToInt32(MinCellY)) * CELL);
             
             // Debug: log coordinate system info
             UnityEngine.Debug.Log($"VTEX to Alphamap mapping: rawWidth={rawWidth}, rawHeight={rawHeight}, alphamapWidth={alphamapWidth}, alphamapHeight={alphamapHeight}, MinCellX={MinCellX}, MinCellY={MinCellY}, terrainOffset=({terrainOffsetX},{terrainOffsetY})");
@@ -1625,8 +1625,8 @@ namespace ESMSharp.TES3Terrain
             // This allows the lowest parts of the map (which are underwater) to be below sea level
             const float HALF_CELL = 32f; // Half of 64 (cell size in world units) - should never change
             const float TERRAIN_Y_OFFSET = -16f; // Quarter cell lower (16 = 64/4) to align sea level
-            float terrainPositionX = -worldWidth / 2f + HALF_CELL;
-            float terrainPositionZ = -worldHeight / 2f + HALF_CELL;
+            float terrainPositionX = (-worldWidth / 2f + HALF_CELL)-2;
+            float terrainPositionZ = (-worldHeight / 2f + HALF_CELL)-2;
             
             terrainObject.transform.position = new Vector3(terrainPositionX, TERRAIN_Y_OFFSET, terrainPositionZ);
             
