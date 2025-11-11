@@ -50,6 +50,7 @@ namespace ESMSharp.TES3
                 if (tes3.Type != "TES3")
                     throw new Exception("That's not a Morrowind master file.");
 
+
                 Utils.LogBuffer("# Loading Morrowind");
                 Utils.LogBuffer("\t- Record: {0}", tes3.Type);
 
@@ -154,14 +155,44 @@ namespace ESMSharp.TES3
 
         }
 
-        public void GenerateTerrain()
+
+        /// <summary>
+        /// TEST FUNCTION: Generate heightmap using Cells algorithm
+        /// </summary>
+        public void GenerateTerrainMaps_CellsLands()
         {
-            const float MORROWIND_TO_TERRAIN_SCALE = 64f / 8192f;
-            const float MORROWIND_MAX_TERRAIN_HEIGHT = 32768f * MORROWIND_TO_TERRAIN_SCALE; // 256 units
+            testerrain = new TESTerrain(Convert.ToInt32(MinCellX), Convert.ToInt32(MaxCellX), Convert.ToInt32(MinCellY), Convert.ToInt32(MaxCellY));
+            testerrain.GenerateHeightMap_Cells(_records, _esm);
+        }
+
+        /// <summary>
+        /// TEST FUNCTION: Generate heightmap using merged_lands algorithm
+        /// Outputs a PNG for comparison: {esm}_MapHeight_MergedLands.png
+        /// </summary>
+        public void GenerateTerrainMaps_MergedLands()
+        {
+            testerrain = new TESTerrain(Convert.ToInt32(MinCellX), Convert.ToInt32(MaxCellX), Convert.ToInt32(MinCellY), Convert.ToInt32(MaxCellY));
+            testerrain.GenerateHeightMap_MergedLands(_records, _esm);
+        }
+
+        public void GenerateCellsTerrain()
+        {
+            // Use global constants from TESGlobals
+            const float MORROWIND_MAX_TERRAIN_HEIGHT = 32768f * TESGlobals.MORROWIND_TO_TERRAIN_SCALE; // 256 units
             // Sea level is 0 in Morrowind, which maps to Y=0 in Unity
             // Terrain is positioned at Y=-16 (quarter cell lower) so sea level aligns properly
             // This allows underwater areas to be below Y=0 and water plane at Y=0 covers them
-            testerrain.GenerateUnityTerrain(_records, "Morrowind.esm", MORROWIND_MAX_TERRAIN_HEIGHT, 0f);
+            testerrain.GenerateUnityTerrainCells(_records, "Morrowind.esm", MORROWIND_MAX_TERRAIN_HEIGHT, 0f);
+        }
+
+        public void GenerateTerrain()
+        {
+            // Terrain height and Y offset are now calculated automatically from the actual height range
+            // The function loads the height range from the saved JSON file and calculates:
+            // - terrainHeight = actualHeightRange * (64f / 8192f)
+            // - terrainYOffset = actualMinHeight * (64f / 8192f)
+            // This matches OpenMW's approach of using actual min/max from terrain data
+            testerrain.GenerateUnityTerrain(_records, "Morrowind.esm", 0f, 0f);
         }
 
 

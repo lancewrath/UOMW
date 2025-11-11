@@ -31,9 +31,33 @@ namespace ESMSharp.TES3Terrain
 
         /// <summary>
         /// Creates cell GameObjects from CELL records (internal method)
+        /// Only creates cells that have a matching LAND record
         /// </summary>
         public void CreateCells(Record[] records, Transform parent = null)
         {
+            // First, build a set of all cell coordinates that have LAND records
+            // This ensures we only create cells where there's actual terrain data
+            HashSet<(int x, int y)> landCellCoordinates = new HashSet<(int, int)>();
+            
+            foreach (Record rec in records)
+            {
+                RecordLand landRecord = rec as RecordLand;
+                if (landRecord != null && landRecord.subRecords != null)
+                {
+                    foreach (SubRecords subrec in landRecord.subRecords)
+                    {
+                        if (subrec is SubRecordLandINTV intv)
+                        {
+                            int landCellX = (int)intv.CellX;
+                            int landCellY = (int)intv.CellY;
+                            landCellCoordinates.Add((landCellX, landCellY));
+                        }
+                    }
+                }
+            }
+            
+            UnityEngine.Debug.Log($"Found {landCellCoordinates.Count} cells with LAND records");
+
             // Create a parent GameObject for all cells
             GameObject cellsParent = new GameObject("Cells");
             if (parent != null)
@@ -79,6 +103,13 @@ namespace ESMSharp.TES3Terrain
                     }
                 }
 
+                // Only create cells that have a matching LAND record (exterior cells only)
+                // This ensures cells match exactly with the heightmap
+                if (!isInterior && !landCellCoordinates.Contains((gridX, gridY)))
+                {
+                    continue; // Skip cells without LAND records
+                }
+
                 // Create cell name
                 string finalCellName;
                 if (!string.IsNullOrEmpty(cellName))
@@ -105,7 +136,7 @@ namespace ESMSharp.TES3Terrain
                 }
             }
 
-            //UnityEngine.Debug.Log($"Created {cellCount} cell GameObjects");
+            UnityEngine.Debug.Log($"Created {cellCount} cell GameObjects (only cells with LAND records for exterior cells)");
         }
 
         /// <summary>
@@ -143,9 +174,7 @@ namespace ESMSharp.TES3Terrain
                         // VHGT offset is in Morrowind units, needs to be scaled
                         // Height scale factor is 8.0f (from terrain generation)
                         // Then convert to Unity units using MORROWIND_TO_TERRAIN_SCALE
-                        const float HEIGHT_SCALE_FACTOR = 8.0f;
-                        const float MORROWIND_TO_TERRAIN_SCALE = 64f / 8192f; // 0.0078125
-                        return vhgt.offset * HEIGHT_SCALE_FACTOR * MORROWIND_TO_TERRAIN_SCALE;
+                        return vhgt.offset * TESGlobals.HEIGHT_MAP_SCALE_FACTOR * TESGlobals.MORROWIND_TO_TERRAIN_SCALE;
                     }
                 }
             }
@@ -177,15 +206,15 @@ namespace ESMSharp.TES3Terrain
             TESCell tesCell = cellObj.AddComponent<TESCell>();
             tesCell.SetCell(cellRecord, this, _allRecords, _esm, _bsa, vhgtHeight);
 
-            // Add box collider (64x64 units per cell in Morrowind)
+            // Add box collider (64x64 units per cell in Morrowind game world)
             BoxCollider collider = cellObj.AddComponent<BoxCollider>();
-            collider.size = new Vector3(64f, 1000f, 64f); // Tall enough to catch player at any height
+            collider.size = new Vector3(TESGlobals.CELL_SIZE, 1000f, TESGlobals.CELL_SIZE); // Tall enough to catch player at any height
             collider.isTrigger = true; // Pass-through collider for events
-            collider.center = new Vector3(32f, 500f, 32f); // Center of cell
+            collider.center = new Vector3(TESGlobals.CELL_SIZE * 0.5f, 500f, TESGlobals.CELL_SIZE * 0.5f); // Center of cell (half of CELL_SIZE)
 
             // Position cell at grid coordinates
-            // Morrowind cells are 64 units apart
-            cellObj.transform.position = new Vector3(gridX * 64f, 0f, gridY * 64f);
+            // Morrowind cells are 64 units apart in game world (65 is only for heightmap generation)
+            cellObj.transform.position = new Vector3(gridX * TESGlobals.CELL_SIZE, 0f, gridY * TESGlobals.CELL_SIZE);
 
             // Parent to parent transform if provided
             if (_parent != null)

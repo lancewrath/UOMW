@@ -21,6 +21,14 @@ namespace ESMSharp.TES3Terrain
         private static int _debugCellCount = 0; // Track number of cells logged for debug
         private string _esm = "";
         private string _bsa = "";
+        
+        // Store global heightmap data for per-cell terrain generation
+        private float[][] _globalHeights = null;
+        private Dictionary<(int x, int y), ushort[][]> _cellVTEXData = null;
+        private Dictionary<ushort, int> _textureIndexToLayerIndex = null;
+        private List<TerrainLayer> _sharedTerrainLayers = null;
+        
+        // Texture cache removed - now using global TESLTextureLibrary
         public TESTerrain() { }
 
         public TESTerrain(int minX, int maxX, int minY, int maxY)
@@ -896,7 +904,7 @@ namespace ESMSharp.TES3Terrain
             //UnityEngine.Debug.Log($"Texture extraction complete: {extractedCount} extracted, {failedCount} failed");
         }
 
-        public void GenerateUnityTerrain(Record[] _records, string esm = "Morrowind", float terrainHeight = 256f, float waterY = 0f)
+        public void GenerateUnityTerrain(Record[] _records, string esm = "Morrowind", float terrainHeight = 0f, float waterY = 0f)
         {
             _esm = System.IO.Path.GetFileNameWithoutExtension(esm);
 
@@ -907,68 +915,156 @@ namespace ESMSharp.TES3Terrain
                 UnityEngine.Debug.LogError($"Heightmap RAW file not found: {rawFilePath}. Please run GenerateHeightMap first.");
                 return;
             }
+            
+            // Load height range from saved file (matches OpenMW's approach of using actual min/max)
+            float actualMinHeight = 0f;
+            float actualMaxHeight = 0f;
+            float actualHeightRange = 0f;
+            string heightRangePath = Application.dataPath + "/StreamingAssets/Data/UOMW/Cache/" + _esm + "_MapHeight_Range.json";
+            if (File.Exists(heightRangePath))
+            {
+                try
+                {
+                    string heightRangeJson = File.ReadAllText(heightRangePath);
+                    // Simple JSON parsing (minHeight, maxHeight, heightRange)
+                    var minMatch = System.Text.RegularExpressions.Regex.Match(heightRangeJson, @"""minHeight"":([-\d.]+)");
+                    var maxMatch = System.Text.RegularExpressions.Regex.Match(heightRangeJson, @"""maxHeight"":([-\d.]+)");
+                    var rangeMatch = System.Text.RegularExpressions.Regex.Match(heightRangeJson, @"""heightRange"":([-\d.]+)");
+                    
+                    if (minMatch.Success && maxMatch.Success && rangeMatch.Success)
+                    {
+                        actualMinHeight = float.Parse(minMatch.Groups[1].Value);
+                        actualMaxHeight = float.Parse(maxMatch.Groups[1].Value);
+                        actualHeightRange = float.Parse(rangeMatch.Groups[1].Value);
+                        UnityEngine.Debug.Log($"Loaded height range: min={actualMinHeight}, max={actualMaxHeight}, range={actualHeightRange}");
+                    }
+                }
+                catch (System.Exception e)
+                {
+                    UnityEngine.Debug.LogWarning($"Failed to load height range from {heightRangePath}: {e.Message}");
+                }
+            }
+            
+            // Calculate terrain height from actual height range (like OpenMW does)
+            // Convert from Morrowind height units to Unity world units using MORROWIND_TO_STATIC_SCALE
+            // This matches how statics are positioned: 64 units per cell, 8192 Morrowind units per cell
+            
+            // Calculate terrain height from actual height range
+            // If terrainHeight is 0 or not provided, calculate from actual range
+            // Otherwise use provided value (for manual override)
+            if (terrainHeight <= 0f && actualHeightRange > 0f)
+            {
+                // Convert height range from Morrowind units to Unity units
+                // terrainHeight = actualHeightRange * MORROWIND_TO_STATIC_SCALE
+                terrainHeight = actualHeightRange * TESGlobals.MORROWIND_TO_STATIC_SCALE;
+                UnityEngine.Debug.Log($"Calculated terrain height from actual range: {terrainHeight} " +
+                    $"(Morrowind range={actualHeightRange}, converted with scale={TESGlobals.MORROWIND_TO_STATIC_SCALE})");
+            }
+            else if (terrainHeight <= 0f)
+            {
+                // Fallback if range file doesn't exist
+                terrainHeight = 160f;
+                UnityEngine.Debug.LogWarning($"Using fallback terrain height: {terrainHeight} (height range file not found)");
+            }
+            else
+            {
+                UnityEngine.Debug.Log($"Using provided terrain height: {terrainHeight}");
+            }
 
             // Read the RAW file dimensions from the heightmap generation
             // RAW file uses 65 samples per cell (for seamless edges)
-            int rawWidth = (Math.Abs(Convert.ToInt32(MinCellX)) + Convert.ToInt32(MaxCellX)) * 65;
-            int rawHeight = (Math.Abs(Convert.ToInt32(MinCellY)) + Convert.ToInt32(MaxCellY)) * 65;
+            // Note: Uses (Abs(Min) + Max) formula which matches the RAW file generation
+            int rawWidth = (Math.Abs(Convert.ToInt32(MinCellX)) + Convert.ToInt32(MaxCellX)) * (int)TESGlobals.HEIGHTMAP_CELL_SIZE;
+            int rawHeight = (Math.Abs(Convert.ToInt32(MinCellY)) + Convert.ToInt32(MaxCellY)) * (int)TESGlobals.HEIGHTMAP_CELL_SIZE;
 
-            // Calculate actual world size: cells are 64 units apart (not 65)
-            // Number of cells in each direction
-            int numCellsX = Convert.ToInt32(MaxCellX) - Convert.ToInt32(MinCellX) + 1;
-            int numCellsY = Convert.ToInt32(MaxCellY) - Convert.ToInt32(MinCellY) + 1;
+            // Calculate number of cells from the RAW dimensions (more accurate than recalculating)
+            // RAW file has 65 samples per cell, so divide by 65 to get cell count
+            int numCellsX = rawWidth / (int)TESGlobals.HEIGHTMAP_CELL_SIZE;
+            int numCellsY = rawHeight / (int)TESGlobals.HEIGHTMAP_CELL_SIZE;
             
-            // The heightmap has 65 samples per cell, but each cell spans 64 units in world space
-            // Unity's heightmap resolution is the number of vertices, which will be rawWidth + 1
-            // To match the heightmap data extent, we need to scale the terrain size
-            // Each sample represents 64/65 units, so rawWidth samples span rawWidth * (64/65) units
-            // But Unity uses heightmapResolution - 1 intervals, so we use rawWidth intervals
-            float worldWidth = rawWidth * (64f / 65f);
-            float worldHeight = rawHeight * (64f / 65f);
+            // The RAW file has 65 samples per cell (for neighbor alignment)
+            // But we extract only 64x64 per cell (the actual playable area)
+            // Calculate extracted dimensions (64 samples per cell)
+            int extractedWidth = numCellsX * (int)TESGlobals.CELL_SIZE;
+            int extractedHeight = numCellsY * (int)TESGlobals.CELL_SIZE;
+            
+            // Store extracted dimensions for final terrain size (64 units per cell)
+            float originalWorldWidth = extractedWidth * 1.0f;
+            float originalWorldHeight = extractedHeight * 1.0f;
+            
+            // For Unity import, we need square dimensions, but we'll restore original at the end
+            float worldWidth = originalWorldWidth;
+            float worldHeight = originalWorldHeight;
 
             // Read RAW heightmap data (16-bit little-endian)
             byte[] rawData = File.ReadAllBytes(rawFilePath);
             
+            // Extract 64x64 chunks from each cell (skip the 65th row/column which is for neighbor alignment)
+            // extractedWidth and extractedHeight are already calculated above
+            
             // Unity terrain heightmap must be (width+1) x (height+1)
-            // The RAW file is rawWidth x rawHeight, so we need to pad it
-            int heightmapWidth = rawWidth + 1;
-            int heightmapHeight = rawHeight + 1;
+            int heightmapWidth = extractedWidth + 1;
+            int heightmapHeight = extractedHeight + 1;
             float[,] heights = new float[heightmapHeight, heightmapWidth];
 
-            // Read RAW data and pad edges
-            for (int y = 0; y < heightmapHeight; y++)
+            // Extract 64x64 chunks from the 65x65 cell data
+            // For each cell, take rows 0-63 and columns 0-63 (skip row 64 and column 64)
+            for (int cellY = 0; cellY < numCellsY; cellY++)
             {
-                for (int x = 0; x < heightmapWidth; x++)
+                for (int cellX = 0; cellX < numCellsX; cellX++)
                 {
-                    // For pixels within RAW bounds, read from file
-                    if (x < rawWidth && y < rawHeight)
+                    // Source position in 65x65 grid
+                    int srcCellStartX = cellX * (int)TESGlobals.HEIGHTMAP_CELL_SIZE;
+                    int srcCellStartY = cellY * (int)TESGlobals.HEIGHTMAP_CELL_SIZE;
+                    
+                    // Destination position in 64x64 grid
+                    int dstCellStartX = cellX * (int)TESGlobals.CELL_SIZE;
+                    int dstCellStartY = cellY * (int)TESGlobals.CELL_SIZE;
+                    
+                    // Copy 64x64 chunk (excluding the 65th row/column)
+                    for (int localY = 0; localY < 64; localY++)
                     {
-                        int byteIndex = (y * rawWidth + x) * 2;
+                        for (int localX = 0; localX < 64; localX++)
+                        {
+                            int srcX = srcCellStartX + localX;
+                            int srcY = srcCellStartY + localY;
+                            int dstX = dstCellStartX + localX;
+                            int dstY = dstCellStartY + localY;
+                            
+                            // Read from RAW file (65x65 per cell)
+                            if (srcX < rawWidth && srcY < rawHeight)
+                            {
+                                int byteIndex = (srcY * rawWidth + srcX) * 2;
                         if (byteIndex + 1 < rawData.Length)
                         {
                             ushort heightValue = (ushort)(rawData[byteIndex] | (rawData[byteIndex + 1] << 8));
-                            heights[y, x] = heightValue / 65535.0f; // Normalize to 0-1
+                                    heights[dstY, dstX] = heightValue / 65535.0f; // Normalize to 0-1
                         }
                         else
                         {
-                            heights[y, x] = 0f; // Default if out of bounds
+                                    heights[dstY, dstX] = 0f;
                         }
                     }
                     else
                     {
-                        // Pad edges by duplicating the last valid pixel
-                        int srcX = Mathf.Clamp(x, 0, rawWidth - 1);
-                        int srcY = Mathf.Clamp(y, 0, rawHeight - 1);
-                        int byteIndex = (srcY * rawWidth + srcX) * 2;
-                        if (byteIndex + 1 < rawData.Length)
-                        {
-                            ushort heightValue = (ushort)(rawData[byteIndex] | (rawData[byteIndex + 1] << 8));
-                            heights[y, x] = heightValue / 65535.0f;
+                                heights[dstY, dstX] = 0f;
+                            }
                         }
-                        else
-                        {
-                            heights[y, x] = 0f;
-                        }
+                    }
+                }
+            }
+            
+            // Pad the right and bottom edges for Unity's (width+1) x (height+1) requirement
+            for (int y = 0; y < heightmapHeight; y++)
+            {
+                for (int x = 0; x < heightmapWidth; x++)
+                {
+                    if (x >= extractedWidth || y >= extractedHeight)
+                    {
+                        // Pad by duplicating the last valid pixel
+                        int srcX = Mathf.Clamp(x, 0, extractedWidth - 1);
+                        int srcY = Mathf.Clamp(y, 0, extractedHeight - 1);
+                        heights[y, x] = heights[srcY, srcX];
                     }
                 }
             }
@@ -1033,16 +1129,18 @@ namespace ESMSharp.TES3Terrain
                 }
                 heights = scaledHeights;
                 
-                // Adjust world size proportionally to maintain correct aspect ratio
-                // The heightmap is now square, but world size should maintain original proportions
-                // Don't change world size - Unity will handle the mapping correctly
+                // For Unity import, we temporarily use square dimensions
+                // But we'll restore original dimensions at the end after SetHeights and SetAlphamaps
+                float maxWorldSize = Mathf.Max(originalWorldWidth, originalWorldHeight);
+                worldWidth = maxWorldSize;
+                worldHeight = maxWorldSize;
             }
             
             // Set Unity's heightmap resolution to the valid resolution we chose
             terrainData.heightmapResolution = actualHeightmapResolution;
             
-            // Set terrain size to match world coordinates (64 units per cell)
-            // This ensures the terrain matches the cell grid placement
+            // Temporarily set terrain size to square for Unity import (required for heightmap and splatmaps)
+            // We'll restore original dimensions at the end
             terrainData.size = new Vector3(worldWidth, terrainHeight, worldHeight);
             
             //UnityEngine.Debug.Log($"Terrain dimensions: RAW file={rawWidth}x{rawHeight} (samples), World size={worldWidth}x{worldHeight} (units), Requested heightmap={heightmapWidth}x{heightmapHeight}, Actual heightmap resolution={actualHeightmapResolution}x{actualHeightmapResolution}, Terrain size={terrainData.size}, Cells={numCellsX}x{numCellsY}");
@@ -1265,7 +1363,18 @@ namespace ESMSharp.TES3Terrain
                     Texture2D texture = null;
                     bool usePlaceholder = false;
                     
-                    if (texturePath != null && File.Exists(texturePath))
+                    // Check global texture library first
+                    if (texturePath != null)
+                    {
+                        TESLTextureLibrary.TextureEntry cachedEntry = TESLTextureLibrary.GetTextureByPath(texturePath);
+                        if (cachedEntry != null)
+                        {
+                            texture = cachedEntry.Texture;
+                            UnityEngine.Debug.Log($"Reusing cached texture from library: {System.IO.Path.GetFileName(texturePath)}");
+                        }
+                    }
+                    
+                    if (texture == null && texturePath != null && File.Exists(texturePath))
                     {
                         try
                         {
@@ -1385,6 +1494,10 @@ namespace ESMSharp.TES3Terrain
                                     texture.filterMode = FilterMode.Bilinear;
                                     texture.anisoLevel = 9;
                                     UnityEngine.Debug.Log($"Loaded DDS texture layer {terrainLayers.Count}: {foundBaseName ?? System.IO.Path.GetFileName(texturePath)} ({texture.width}x{texture.height})");
+                                    
+                                    // Add to global texture library
+                                    string textureName = names.primary ?? names.fallback ?? foundBaseName ?? System.IO.Path.GetFileNameWithoutExtension(texturePath);
+                                    TESLTextureLibrary.AddTexture(textureName, ltexIndex, vtexIndex, texturePath, texture);
                                 }
                                 #else
                                 // At runtime, DDS loading is more complex - use placeholder for now
@@ -1416,6 +1529,10 @@ namespace ESMSharp.TES3Terrain
                                     #endif
 
                                     UnityEngine.Debug.Log($"Loaded texture layer {terrainLayers.Count}: {foundBaseName ?? System.IO.Path.GetFileName(texturePath)} ({texture.width}x{texture.height})");
+                                    
+                                    // Add to global texture library
+                                    string textureName = names.primary ?? names.fallback ?? foundBaseName ?? System.IO.Path.GetFileNameWithoutExtension(texturePath);
+                                    TESLTextureLibrary.AddTexture(textureName, ltexIndex, vtexIndex, texturePath, texture);
                                 }
                                 else
                                 {
@@ -1433,7 +1550,7 @@ namespace ESMSharp.TES3Terrain
                     else
                     {
                         string triedNames = string.Join(", ", namesToTry);
-                        UnityEngine.Debug.LogWarning($"Texture file not found for index {ltexIndex} (tried: {triedNames}) (searched in: {textureDir}), using placeholder");
+                        UnityEngine.Debug.LogWarning($"Texture file not found for VTEX {vtexIndex} (LTEX {ltexIndex}) (tried: {triedNames}) (searched in: {textureDir}), using placeholder");
                         usePlaceholder = true;
                     }
 
@@ -1455,7 +1572,12 @@ namespace ESMSharp.TES3Terrain
                     layer.smoothness = 0.1f; // Low smoothness to reduce shininess
                     
                     terrainLayers.Add(layer);
-                    textureIndexToLayerIndex[vtexIndex] = terrainLayers.Count - 1;
+                    int assignedLayerIndex = terrainLayers.Count - 1;
+                    textureIndexToLayerIndex[vtexIndex] = assignedLayerIndex;
+                }
+                else
+                {
+                    // No LTEX record found for this VTEX index, skip layer creation
                 }
             }
 
@@ -1503,7 +1625,7 @@ namespace ESMSharp.TES3Terrain
             // Use the same coordinate system as GenerateHeightMap
             const int CELL = 65;
             const int VTEX_SIZE = 16;
-            const int STEP = 64;
+            const int STEP = 65; // Cell size in world units (matches heightmap samples per cell)
             const int HALF = CELL / 2;
             
             // Calculate cell positions in terrain coordinates
@@ -1533,13 +1655,10 @@ namespace ESMSharp.TES3Terrain
                 int cellOffsetX = (cellx - Convert.ToInt32(MinCellX)) * STEP;
                 int cellOffsetY = (celly - Convert.ToInt32(MinCellY)) * STEP;
                 
-                // Start position: each cell is 65 pixels, but spaced 64 apart
-                // The first cell starts at HALF (32) pixels from the origin
-                // Offset adjustment: splat map was one cell too far on Z (positive) and two cells too far on X (negative)
-                // Z positive = subtract from Y (since Y becomes Z after coordinate conversion)
-                // X negative = add to X (move forward in positive X direction)
-                int startX = HALF + cellOffsetX + (STEP/2)-2;  // Add 1 cells to fix X offset
-                int startY = HALF + cellOffsetY - (STEP/2)-2;         // Subtract 1 cell to fix Z offset
+                // Start position: each cell is 65 pixels, spaced 65 apart
+                // With correct 65x65 cell size, no offset needed - cellOffsetX/Y already accounts for cell positions
+                int startX = HALF + cellOffsetX + (STEP/2);  // Add 1 cells to fix X offset
+                int startY = HALF + cellOffsetY - STEP;         // Subtract 1 cell to fix Z offset
 
                 // Calculate scale factors: map from terrain coordinates (rawWidth x rawHeight) to alphamap coordinates
                 // Since the heightmap is now correctly scaled, we can use simple terrain-based scaling
@@ -1558,7 +1677,7 @@ namespace ESMSharp.TES3Terrain
                             continue;
 
                         // Map each VTEX entry to terrain coordinates
-                        // Each cell is 64x64, VTEX is 16x16, so each VTEX entry covers 64/16 = 4 terrain pixels
+                        // Each cell is 65x65, VTEX is 16x16, so each VTEX entry covers 65/16 = 4.0625 terrain pixels (rounded to 4)
                         int terrainX = startX + (vx * STEP / VTEX_SIZE);
                         int terrainY = startY + (vy * STEP / VTEX_SIZE);
                         
@@ -1581,6 +1700,7 @@ namespace ESMSharp.TES3Terrain
                         alphamaps[alphamapY, alphamapX, layerIndex] = 1.0f;
                     }
                 }
+                
             }
 
             // Normalize alphamaps
@@ -1611,26 +1731,54 @@ namespace ESMSharp.TES3Terrain
             // Step 8: Apply alphamaps to terrain
             terrainData.SetAlphamaps(0, 0, alphamaps);
 
-            // Step 9: Create Terrain GameObject
+            // Step 9: Set terrain dimensions (already extracted to 64-unit cells)
+            // Heightmap was extracted from 65x65 per cell to 64x64 per cell (removing alignment rows/columns)
+            // So originalWorldWidth/Height are already in 64-unit cells
+            float actualWorldWidth = originalWorldWidth;
+            float actualWorldHeight = originalWorldHeight;
+            terrainData.size = new Vector3(actualWorldWidth, terrainHeight, actualWorldHeight);
+            
+            UnityEngine.Debug.Log($"Terrain size set to extracted 64-unit cell dimensions: {actualWorldWidth}x{actualWorldHeight} (from square {worldWidth}x{worldHeight})");
+
+            // Step 10: Create Terrain GameObject
             GameObject terrainObject = Terrain.CreateTerrainGameObject(terrainData);
             terrainObject.name = _esm + "_Terrain";
             Terrain terrain = terrainObject.GetComponent<Terrain>();
             terrain.heightmapPixelError = 5f;
             terrain.basemapDistance = 1000f;
             
-            // Position terrain at its center (not at cell 0,0)
-            // Terrain size is worldWidth x worldHeight, so center it at (-worldWidth/2, 0, -worldHeight/2)
-            // Offset by half a cell (32 units) to center on cell center rather than cell corner
-            // Morrowind terrain starts a quarter cell (16 units) lower so that sea level aligns properly
-            // This allows the lowest parts of the map (which are underwater) to be below sea level
-            const float HALF_CELL = 32f; // Half of 64 (cell size in world units) - should never change
-            const float TERRAIN_Y_OFFSET = -16f; // Quarter cell lower (16 = 64/4) to align sea level
-            float terrainPositionX = (-worldWidth / 2f + HALF_CELL)-2;
-            float terrainPositionZ = (-worldHeight / 2f + HALF_CELL)-2;
+            // Position terrain based on furthest negative cell coordinates
+            // Terrain position is at its corner (bottom-left), so position at MinCellX * 64, MinCellY * 64
+            // Game world uses 64 units per cell (not 65, which is only for heightmap generation)
+            // Calculate Y offset from actual min height (converts Morrowind height units to Unity units)
+            // This ensures the lowest terrain point maps correctly to the terrain
+            float terrainYOffset = 0f;
+            if (actualMinHeight != 0f)
+            {
+                // Convert min height from Morrowind units to Unity units
+                // This offsets the terrain so the lowest point maps correctly
+                terrainYOffset = actualMinHeight * TESGlobals.MORROWIND_TO_STATIC_SCALE;
+                UnityEngine.Debug.Log($"Calculated terrain Y offset from min height: {terrainYOffset} " +
+                    $"(Morrowind min={actualMinHeight}, converted with scale={TESGlobals.MORROWIND_TO_STATIC_SCALE})");
+            }
+            else
+            {
+                // Fallback if min height not available
+                terrainYOffset = -16.4f;
+                UnityEngine.Debug.LogWarning($"Using fallback terrain Y offset: {terrainYOffset} (min height not available)");
+            }
             
-            terrainObject.transform.position = new Vector3(terrainPositionX, TERRAIN_Y_OFFSET, terrainPositionZ);
+            float terrainPositionX = Convert.ToInt32(MinCellX) * TESGlobals.CELL_SIZE;
+            float terrainPositionZ = Convert.ToInt32(MinCellY) * TESGlobals.CELL_SIZE;
             
-            UnityEngine.Debug.Log($"Terrain positioned at center: ({terrainPositionX}, {TERRAIN_Y_OFFSET}, {terrainPositionZ}), terrain size: {worldWidth}x{worldHeight}, offset by {HALF_CELL} units to center on cell, Y offset {TERRAIN_Y_OFFSET} for sea level alignment");
+            terrainObject.transform.position = new Vector3(terrainPositionX, terrainYOffset, terrainPositionZ);
+            
+            UnityEngine.Debug.Log($"Terrain positioned: position=({terrainPositionX}, {terrainYOffset}, {terrainPositionZ}), " +
+                $"terrain size: {actualWorldWidth}x{actualWorldHeight}, " +
+                $"cell range: X[{MinCellX} to {MaxCellX}], Y[{MinCellY} to {MaxCellY}], " +
+                $"terrain edges: X[{terrainPositionX} to {terrainPositionX + actualWorldWidth}], " +
+                $"Z[{terrainPositionZ} to {terrainPositionZ + actualWorldHeight}], " +
+                $"furthest negative cells: X={MinCellX} ({terrainPositionX}), Y={MinCellY} ({terrainPositionZ})");
             
             // Configure terrain material to reduce shininess/metallic (looks too wet/icy)
             // Try URP terrain shader first
@@ -1683,13 +1831,14 @@ namespace ESMSharp.TES3Terrain
             GameObject waterPlane = GameObject.CreatePrimitive(PrimitiveType.Plane);
             waterPlane.name = _esm + "_Water";
             
-            // Position water plane at terrain center (terrain center is offset by +32 units to center on cell)
-            float waterCenterX = HALF_CELL; // Terrain center is offset by +32 units
-            float waterCenterZ = HALF_CELL;
+            // Position water plane at terrain center
+            // Terrain position is at bottom-left corner, so center is position + half size
+            float waterCenterX = terrainPositionX + (actualWorldWidth * 0.5f);
+            float waterCenterZ = terrainPositionZ + (actualWorldHeight * 0.5f);
             waterPlane.transform.position = new Vector3(waterCenterX, waterY, waterCenterZ);
-            waterPlane.transform.localScale = new Vector3(worldWidth * 0.1f, 1f, worldHeight * 0.1f);
+            waterPlane.transform.localScale = new Vector3(actualWorldWidth * 0.1f, 1f, actualWorldHeight * 0.1f);
             
-            UnityEngine.Debug.Log($"Water plane positioned at ({waterCenterX}, {waterY}, {waterCenterZ}) to align with terrain center (offset by {HALF_CELL} units)");
+            UnityEngine.Debug.Log($"Water plane positioned at ({waterCenterX}, {waterY}, {waterCenterZ}) to align with terrain center");
             
             Renderer waterRenderer = waterPlane.GetComponent<Renderer>();
             
@@ -1737,6 +1886,1247 @@ namespace ESMSharp.TES3Terrain
             }
             
             waterRenderer.material = waterMaterial;
+        }
+
+        public void GenerateUnityTerrainCells(Record[] _records, string esm = "Morrowind", float terrainHeight = 256f, float waterY = 0f)
+        {
+            if (_sharedTerrainLayers == null)
+            {
+                UnityEngine.Debug.LogError("Terrain layers not available. Call GenerateHeightMap_Cells first.");
+                return;
+            }
+            
+            _esm = System.IO.Path.GetFileNameWithoutExtension(esm);
+            
+            UnityEngine.Debug.Log("=== GenerateUnityTerrainCells: Creating per-cell terrain tiles ===");
+            
+            const int CELL = 65;
+            
+            // Get all cells with LAND records
+            HashSet<(int x, int y)> landCellCoordinates = new HashSet<(int, int)>();
+            foreach (Record rec in _records)
+            {
+                RecordLand landRecord = rec as RecordLand;
+                if (landRecord != null && landRecord.subRecords != null)
+                {
+                    foreach (SubRecords subrec in landRecord.subRecords)
+                    {
+                        if (subrec is SubRecordLandINTV intv)
+                        {
+                            int landCellX = (int)intv.CellX;
+                            int landCellY = (int)intv.CellY;
+                            landCellCoordinates.Add((landCellX, landCellY));
+                        }
+                    }
+                }
+            }
+            
+            UnityEngine.Debug.Log($"Creating terrain tiles for {landCellCoordinates.Count} cells");
+            
+            int tilesCreated = 0;
+            
+            // Create terrain tile for each cell
+            foreach (var (cellX, cellY) in landCellCoordinates)
+            {
+                // Load cell height data from RAW file (faster and less memory intensive)
+                float minHeight, maxHeight;
+                float[,] normalizedHeights = LoadCellRawFile(cellX, cellY, out minHeight, out maxHeight);
+                
+                // Heights are already normalized to 0-1 range from the RAW file
+                
+                // Create TerrainData for this cell (65x65 is a valid Unity resolution - power of 2 + 1)
+                TerrainData terrainData = new TerrainData();
+                terrainData.heightmapResolution = CELL; // 65 is valid (2^6 + 1)
+                terrainData.size = new Vector3(TESGlobals.HEIGHTMAP_CELL_SIZE, terrainHeight, TESGlobals.HEIGHTMAP_CELL_SIZE); // 65 units per cell
+                terrainData.SetHeights(0, 0, normalizedHeights);
+                
+                // COMMENTED OUT: Texturing and splat maps to reduce memory usage
+                // Set terrain layers
+                // terrainData.terrainLayers = _sharedTerrainLayers.ToArray();
+                
+                // Create terrain GameObject
+                GameObject terrainObject = Terrain.CreateTerrainGameObject(terrainData);
+                terrainObject.name = $"Cell_Terrain_{cellX}_{cellY}";
+                
+                // Position terrain at cell's world position
+                float worldX = cellX * TESGlobals.HEIGHTMAP_CELL_SIZE;
+                float worldZ = cellY * TESGlobals.HEIGHTMAP_CELL_SIZE;
+                terrainObject.transform.position = new Vector3(worldX, 0f, worldZ);
+                
+                // Enable autoconnect to stitch with neighboring terrain tiles
+                Terrain terrain = terrainObject.GetComponent<Terrain>();
+                terrain.allowAutoConnect = true;
+                terrain.heightmapPixelError = 5f;
+                terrain.basemapDistance = 1000f;
+                
+                // COMMENTED OUT: Create alphamap for this cell from VTEX data (reduces memory usage)
+                // if (_cellVTEXData != null && _textureIndexToLayerIndex != null)
+                // {
+                //     CreateCellAlphamap(terrainData, cellX, cellY);
+                // }
+                
+                tilesCreated++;
+            }
+            
+            UnityEngine.Debug.Log($"=== GenerateUnityTerrainCells: Complete - Created {tilesCreated} terrain tiles ===");
+        }
+        
+        /// <summary>
+        /// Creates alphamap (splat map) for a single cell from VTEX data
+        /// </summary>
+        private void CreateCellAlphamap(TerrainData terrainData, int cellGridX, int cellGridY)
+        {
+            if (!_cellVTEXData.TryGetValue((cellGridX, cellGridY), out ushort[][] vtexIndices))
+            {
+                // No VTEX data for this cell, use default layer
+                return;
+            }
+            
+            const int VTEX_SIZE = 16;
+            const int CELL = 65;
+            int alphamapWidth = terrainData.alphamapWidth;
+            int alphamapHeight = terrainData.alphamapHeight;
+            int layerCount = terrainData.terrainLayers.Length;
+            
+            float[,,] alphamaps = new float[alphamapHeight, alphamapWidth, layerCount];
+            
+            // Initialize all to 0
+            for (int y = 0; y < alphamapHeight; y++)
+            {
+                for (int x = 0; x < alphamapWidth; x++)
+                {
+                    for (int layer = 0; layer < layerCount; layer++)
+                    {
+                        alphamaps[y, x, layer] = 0f;
+                    }
+                }
+            }
+            
+            // Map VTEX data to alphamap
+            // VTEX is 16x16, cell is 65x65, so each VTEX entry covers ~4 pixels
+            float vtexToAlphamapX = (float)alphamapWidth / CELL;
+            float vtexToAlphamapY = (float)alphamapHeight / CELL;
+            
+            for (int vy = 0; vy < VTEX_SIZE; vy++)
+            {
+                if (vtexIndices[vy] == null) continue;
+                
+                for (int vx = 0; vx < VTEX_SIZE; vx++)
+                {
+                    ushort vtexIndex = vtexIndices[vy][vx];
+                    
+                    if (vtexIndex == 0 || !_textureIndexToLayerIndex.TryGetValue(vtexIndex, out int layerIndex))
+                        continue;
+                    
+                    // Map VTEX coordinate to alphamap coordinate
+                    // Each VTEX entry covers CELL/VTEX_SIZE pixels
+                    float terrainX = (vx + 0.5f) * (CELL / (float)VTEX_SIZE);
+                    float terrainY = (vy + 0.5f) * (CELL / (float)VTEX_SIZE);
+                    
+                    int alphamapX = Mathf.RoundToInt(terrainX * vtexToAlphamapX);
+                    int alphamapY = Mathf.RoundToInt(terrainY * vtexToAlphamapY);
+                    
+                    alphamapX = Mathf.Clamp(alphamapX, 0, alphamapWidth - 1);
+                    alphamapY = Mathf.Clamp(alphamapY, 0, alphamapHeight - 1);
+                    
+                    // Apply texture to alphamap pixel
+                    alphamaps[alphamapY, alphamapX, layerIndex] = 1.0f;
+                }
+            }
+            
+            // Normalize alphamaps
+            for (int y = 0; y < alphamapHeight; y++)
+            {
+                for (int x = 0; x < alphamapWidth; x++)
+                {
+                    float sum = 0f;
+                    for (int layer = 0; layer < layerCount; layer++)
+                    {
+                        sum += alphamaps[y, x, layer];
+                    }
+                    if (sum > 0.01f)
+                    {
+                        for (int layer = 0; layer < layerCount; layer++)
+                        {
+                            alphamaps[y, x, layer] /= sum;
+                        }
+                    }
+                    else
+                    {
+                        // Default to first layer if no texture assigned
+                        if (layerCount > 0)
+                        {
+                            alphamaps[y, x, 0] = 1.0f;
+                        }
+                    }
+                }
+            }
+            
+            terrainData.SetAlphamaps(0, 0, alphamaps);
+        }
+
+        public void GenerateHeightMap_Cells(Record[] _records, string esm = "Morrowind")
+        {
+            _esm = System.IO.Path.GetFileNameWithoutExtension(esm);
+            
+            UnityEngine.Debug.Log("=== GenerateHeightMap_Cells: Generating heightmap for per-cell terrain ===");
+            
+            // Use the same algorithm as GenerateHeightMap_MergedLands
+            // Calculate dimensions
+            int width = (Math.Abs(Convert.ToInt32(MinCellX)) + Convert.ToInt32(MaxCellX)) * 65;
+            int height = (Math.Abs(Convert.ToInt32(MinCellY)) + Convert.ToInt32(MaxCellY)) * 65;
+            
+            UnityEngine.Debug.Log($"Heightmap dimensions: {width}x{height}");
+            
+            // Create global height array
+            _globalHeights = new float[height][];
+            for (int i = 0; i < height; i++)
+            {
+                _globalHeights[i] = new float[width];
+            }
+            
+            const int CELL = 65;
+            // Use global constant from TESGlobals
+            
+            // Collect cell data (offset and deltas)
+            Dictionary<(int x, int y), (float offset, sbyte[][] deltas)> cellData = 
+                new Dictionary<(int, int), (float, sbyte[][])>();
+            
+            foreach (Record recs in _records)
+            {
+                RecordLand landRecord = recs as RecordLand;
+                if (landRecord != null)
+                {
+                    SubRecordLandINTV intv = null;
+                    float offset = 0f;
+                    sbyte[][] deltas = null;
+                    
+                    if (landRecord.subRecords != null)
+                    {
+                        foreach (SubRecords subrecs in landRecord.subRecords)
+                        {
+                            if (subrecs == null || subrecs.type == null) continue;
+                            
+                            if (subrecs.type == "INTV")
+                            {
+                                intv = subrecs as SubRecordLandINTV;
+                            }
+                            if (subrecs.type == "VHGT")
+                            {
+                                SubRecordLandVHGT subrecordLandVHGT = subrecs as SubRecordLandVHGT;
+                                if (subrecordLandVHGT != null)
+                                {
+                                    offset = subrecordLandVHGT.offset;
+                                    deltas = subrecordLandVHGT.heightdata;
+                                }
+                            }
+                        }
+                    }
+                    
+                    if (intv != null && deltas != null)
+                    {
+                        try
+                        {
+                            int cellX = Convert.ToInt32(intv.CellX);
+                            int cellY = Convert.ToInt32(intv.CellY);
+                            cellData[(cellX, cellY)] = (offset, deltas);
+                        }
+                        catch (System.Exception ex)
+                        {
+                            UnityEngine.Debug.LogWarning($"Failed to process cell data: {ex.Message}");
+                        }
+                    }
+                }
+            }
+            
+            UnityEngine.Debug.Log($"Found {cellData.Count} land cells");
+            
+            // Dictionary to store processed cell heights for neighbor lookups
+            Dictionary<(int x, int y), float[][]> cellHeights = new Dictionary<(int, int), float[][]>();
+            
+            // Process cells in sorted order (bottom-left to top-right)
+            var sortedCells = cellData.Keys.OrderBy(c => c.y).ThenBy(c => c.x).ToList();
+            
+            // Process each cell using the merged lands algorithm
+            foreach (var (cellX, cellY) in sortedCells)
+            {
+                var (offset, deltas) = cellData[(cellX, cellY)];
+                
+                int startX = (cellX - Convert.ToInt32(MinCellX)) * CELL;
+                int startY = (cellY - Convert.ToInt32(MinCellY)) * CELL;
+                
+                int rowOffset = (int)offset;
+                float[][] cellHeightsArray = new float[CELL][];
+                for (int i = 0; i < CELL; i++)
+                {
+                    cellHeightsArray[i] = new float[CELL];
+                }
+                
+                int[] rowFirstColumnUnscaled = new int[CELL];
+                
+                for (int y = 0; y < CELL; y++)
+                {
+                    if (y == 0)
+                    {
+                        if (cellY > Convert.ToInt32(MinCellY) && cellHeights.ContainsKey((cellX, cellY - 1)))
+                        {
+                            float[][] bottomCell = cellHeights[(cellX, cellY - 1)];
+                            float neighborHeight = bottomCell[CELL - 1][0];
+                            rowOffset = (int)Math.Round(neighborHeight / TESGlobals.HEIGHT_MAP_SCALE_FACTOR);
+                        }
+                        else if (cellX > Convert.ToInt32(MinCellX) && cellHeights.ContainsKey((cellX - 1, cellY)))
+                        {
+                            float[][] leftCell = cellHeights[(cellX - 1, cellY)];
+                            float neighborHeight = leftCell[0][63];
+                            rowOffset = (int)Math.Round(neighborHeight / TESGlobals.HEIGHT_MAP_SCALE_FACTOR);
+                        }
+                        else
+                        {
+                            rowOffset = (int)offset;
+                        }
+                    }
+                    else
+                    {
+                        if (cellX > Convert.ToInt32(MinCellX) && cellHeights.ContainsKey((cellX - 1, cellY)))
+                        {
+                            float[][] leftCell = cellHeights[(cellX - 1, cellY)];
+                            float neighborHeight = leftCell[y][63];
+                            rowOffset = (int)Math.Round(neighborHeight / TESGlobals.HEIGHT_MAP_SCALE_FACTOR);
+                        }
+                        else
+                        {
+                            rowOffset = rowFirstColumnUnscaled[y - 1];
+                        }
+                    }
+                    
+                    rowOffset += deltas[y][0];
+                    rowFirstColumnUnscaled[y] = rowOffset;
+                    cellHeightsArray[y][0] = rowOffset * TESGlobals.HEIGHT_MAP_SCALE_FACTOR;
+                    
+                    int colOffset = rowOffset;
+                    for (int x = 1; x < CELL; x++)
+                    {
+                        colOffset += deltas[y][x];
+                        cellHeightsArray[y][x] = colOffset * TESGlobals.HEIGHT_MAP_SCALE_FACTOR;
+                    }
+                }
+                
+                cellHeights[(cellX, cellY)] = cellHeightsArray;
+                
+                // Write to global array (still needed for PNG export)
+                for (int ly = 0; ly < CELL; ly++)
+                {
+                    int py = startY + ly;
+                    if (py < 0 || py >= height) continue;
+                    
+                    for (int lx = 0; lx < CELL; lx++)
+                    {
+                        int px = startX + lx;
+                        if (px < 0 || px >= width) continue;
+                        
+                        _globalHeights[py][px] = cellHeightsArray[ly][lx];
+                    }
+                }
+            }
+            
+            // Find global min/max from the final merged heightmap for proper normalization
+            float globalMinHeight = float.MaxValue;
+            float globalMaxHeight = float.MinValue;
+            bool foundValidHeight = false;
+            
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    float h = _globalHeights[y][x];
+                    if (h != 0f || foundValidHeight)
+                    {
+                        if (!foundValidHeight)
+                        {
+                            globalMinHeight = h;
+                            globalMaxHeight = h;
+                            foundValidHeight = true;
+                        }
+                        else
+                        {
+                            if (h < globalMinHeight) globalMinHeight = h;
+                            if (h > globalMaxHeight) globalMaxHeight = h;
+                        }
+                    }
+                }
+            }
+            
+            float globalHeightRange = globalMaxHeight - globalMinHeight;
+            if (globalHeightRange < 0.001f) globalHeightRange = 1f;
+            
+            UnityEngine.Debug.Log($"Global height range for cell sampling: min={globalMinHeight}, max={globalMaxHeight}, range={globalHeightRange}");
+            
+            // After the complete heightmap is built, sample each cell from the final merged heightmap
+            // This ensures we get the perfect accumulated heights from the merged lands algorithm
+            UnityEngine.Debug.Log("Sampling cells from final merged heightmap...");
+            HashSet<(int x, int y)> cellsToSample = new HashSet<(int, int)>();
+            foreach (var (cellX, cellY) in cellData.Keys)
+            {
+                cellsToSample.Add((cellX, cellY));
+            }
+            
+            foreach (var (cellX, cellY) in cellsToSample)
+            {
+                // Sample 65x65 chunk from the final merged heightmap
+                int startX = (cellX - Convert.ToInt32(MinCellX)) * CELL;
+                int startY = (cellY - Convert.ToInt32(MinCellY)) * CELL;
+                
+                float[][] sampledCellHeights = new float[CELL][];
+                for (int y = 0; y < CELL; y++)
+                {
+                    sampledCellHeights[y] = new float[CELL];
+                    int py = startY + y;
+                    if (py >= 0 && py < height)
+                    {
+                        for (int x = 0; x < CELL; x++)
+                        {
+                            int px = startX + x;
+                            if (px >= 0 && px < width)
+                            {
+                                sampledCellHeights[y][x] = _globalHeights[py][px];
+                            }
+                            else
+                            {
+                                sampledCellHeights[y][x] = 0f;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        for (int x = 0; x < CELL; x++)
+                        {
+                            sampledCellHeights[y][x] = 0f;
+                        }
+                    }
+                }
+                
+                // Save the sampled cell data as RAW file using global min/max for normalization
+                SaveCellRawFile(cellX, cellY, sampledCellHeights, globalMinHeight, globalMaxHeight);
+            }
+            
+            UnityEngine.Debug.Log($"Sampled and saved {cellsToSample.Count} cell RAW files from final merged heightmap");
+            
+            // Collect VTEX data
+            _cellVTEXData = new Dictionary<(int, int), ushort[][]>();
+            HashSet<ushort> uniqueTextureIndices = new HashSet<ushort>();
+            
+            foreach (Record rec in _records)
+            {
+                RecordLand landRecord = rec as RecordLand;
+                if (landRecord != null)
+                {
+                    int cellx = 0;
+                    int celly = 0;
+                    ushort[][] vtexData = null;
+                    
+                    foreach (SubRecords subrec in landRecord.subRecords)
+                    {
+                        SubRecordLandINTV intvSubrec = subrec as SubRecordLandINTV;
+                        if (intvSubrec != null)
+                        {
+                            cellx = Convert.ToInt32(intvSubrec.CellX);
+                            celly = Convert.ToInt32(intvSubrec.CellY);
+                        }
+                        
+                        SubRecordLandVTEX vtexSubrec = subrec as SubRecordLandVTEX;
+                        if (vtexSubrec != null)
+                        {
+                            vtexData = vtexSubrec.indices;
+                        }
+                    }
+                    
+                    if (vtexData != null)
+                    {
+                        _cellVTEXData[(cellx, celly)] = vtexData;
+                        for (int y = 0; y < 16; y++)
+                        {
+                            if (vtexData[y] != null)
+                            {
+                                for (int x = 0; x < 16; x++)
+                                {
+                                    uniqueTextureIndices.Add(vtexData[y][x]);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Build texture index to filename mapping
+            Dictionary<int, (string primary, string fallback)> textureIndexToNames = new Dictionary<int, (string, string)>();
+            foreach (Record rec in _records)
+            {
+                RecordLTex ltexRecord = rec as RecordLTex;
+                if (ltexRecord != null)
+                {
+                    int textureIndex = -1;
+                    string filename = null;
+                    string name = null;
+                    
+                    foreach (SubRecords subrec in ltexRecord.subRecords)
+                    {
+                        SubRecordLTexINTV intvSubrec = subrec as SubRecordLTexINTV;
+                        if (intvSubrec != null)
+                        {
+                            textureIndex = intvSubrec.index;
+                        }
+                        
+                        SubRecordLTexData dataSubrec = subrec as SubRecordLTexData;
+                        if (dataSubrec != null)
+                        {
+                            filename = dataSubrec.filename;
+                        }
+                        
+                        SubRecordLTexNAME nameSubrec = subrec as SubRecordLTexNAME;
+                        if (nameSubrec != null)
+                        {
+                            name = nameSubrec.name;
+                            if (!string.IsNullOrEmpty(name))
+                            {
+                                name = name.TrimEnd('\0', ' ', '\t', '\r', '\n');
+                                name = name.Replace("\0", "");
+                                name = name.Trim();
+                            }
+                        }
+                    }
+                    
+                    if (textureIndex >= 0)
+                    {
+                        string primaryName = null;
+                        string fallbackName = null;
+                        
+                        if (!string.IsNullOrEmpty(name))
+                        {
+                            primaryName = name;
+                        }
+                        
+                        if (!string.IsNullOrEmpty(filename))
+                        {
+                            fallbackName = filename.TrimEnd('\0', ' ', '\t', '\r', '\n');
+                            fallbackName = fallbackName.Replace("\0", "");
+                            fallbackName = fallbackName.Trim();
+                        }
+                        
+                        if (!string.IsNullOrEmpty(primaryName) || !string.IsNullOrEmpty(fallbackName))
+                        {
+                            textureIndexToNames[textureIndex] = (primaryName ?? fallbackName, fallbackName);
+                        }
+                    }
+                }
+            }
+            
+            // Create terrain layers (reuse logic from GenerateUnityTerrain)
+            _sharedTerrainLayers = new List<TerrainLayer>();
+            _textureIndexToLayerIndex = new Dictionary<ushort, int>();
+            
+            Texture2D CreatePlaceholderTexture(string name, Color color)
+            {
+                Texture2D placeholder = new Texture2D(64, 64, TextureFormat.RGB24, false);
+                Color[] pixels = new Color[64 * 64];
+                for (int i = 0; i < pixels.Length; i++)
+                {
+                    pixels[i] = color;
+                }
+                placeholder.SetPixels(pixels);
+                placeholder.Apply();
+                placeholder.name = name;
+                return placeholder;
+            }
+            
+            Texture2D placeholderTexture = CreatePlaceholderTexture("Placeholder", new Color(0.5f, 0.5f, 0.5f, 1f));
+            
+            List<ushort> sortedIndices = uniqueTextureIndices.OrderBy(x => x).ToList();
+            
+            foreach (ushort vtexIndex in sortedIndices)
+            {
+                if (vtexIndex == 0)
+                    continue;
+                
+                int ltexIndex = vtexIndex - 1;
+                
+                if (textureIndexToNames.TryGetValue(ltexIndex, out var names))
+                {
+                    string textureDir = System.IO.Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Textures", _esm);
+                    
+                    List<string> namesToTry = new List<string>();
+                    if (!string.IsNullOrEmpty(names.primary))
+                    {
+                        namesToTry.Add(names.primary);
+                        namesToTry.Add("Tx_" + names.primary);
+                        namesToTry.Add("tx_" + names.primary.ToLower());
+                    }
+                    if (!string.IsNullOrEmpty(names.fallback))
+                    {
+                        namesToTry.Add(names.fallback);
+                        string fallbackBase = System.IO.Path.GetFileNameWithoutExtension(names.fallback);
+                        namesToTry.Add(fallbackBase);
+                    }
+                    namesToTry = namesToTry.Distinct().ToList();
+                    
+                    string texturePath = null;
+                    string foundBaseName = null;
+                    
+                    if (Directory.Exists(textureDir))
+                    {
+                        string[] files = Directory.GetFiles(textureDir);
+                        
+                        foreach (string nameToTry in namesToTry)
+                        {
+                            string baseNameNoExt = System.IO.Path.GetFileNameWithoutExtension(nameToTry);
+                            string[] extensions = new[] { ".png", ".dds", ".tga" };
+                            string originalExt = System.IO.Path.GetExtension(nameToTry);
+                            if (!string.IsNullOrEmpty(originalExt) && !extensions.Contains(originalExt.ToLower()))
+                            {
+                                extensions = new[] { originalExt.ToLower() }.Concat(extensions).ToArray();
+                            }
+                            
+                            foreach (string ext in extensions)
+                            {
+                                string searchFilename = baseNameNoExt + ext;
+                                foreach (string file in files)
+                                {
+                                    string fileName = System.IO.Path.GetFileName(file);
+                                    if (fileName.Equals(searchFilename, StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        texturePath = file;
+                                        foundBaseName = fileName;
+                                        break;
+                                    }
+                                }
+                                if (texturePath != null) break;
+                            }
+                            if (texturePath != null) break;
+                        }
+                    }
+                    
+                    Texture2D texture = null;
+                    bool usePlaceholder = false;
+                    
+                    // Check global texture library first
+                    if (texturePath != null)
+                    {
+                        TESLTextureLibrary.TextureEntry cachedEntry = TESLTextureLibrary.GetTextureByPath(texturePath);
+                        if (cachedEntry != null)
+                        {
+                            texture = cachedEntry.Texture;
+                            UnityEngine.Debug.Log($"Reusing cached texture from library: {System.IO.Path.GetFileName(texturePath)}");
+                        }
+                    }
+                    
+                    if (texture == null && texturePath != null && File.Exists(texturePath))
+                    {
+                        try
+                        {
+                            string textureExtension = System.IO.Path.GetExtension(texturePath).ToLower();
+                            
+                            if (textureExtension == ".dds")
+                            {
+                                string pngPath = System.IO.Path.ChangeExtension(texturePath, ".png");
+                                if (!System.IO.File.Exists(pngPath))
+                                {
+                                    byte[] ddsData = System.IO.File.ReadAllBytes(texturePath);
+                                    if (ConvertDDSToPNG(ddsData, pngPath))
+                                    {
+                                        #if UNITY_EDITOR
+                                        SetTextureImportSettings(pngPath);
+                                        #endif
+                                        texturePath = pngPath;
+                                        textureExtension = ".png";
+                                        foundBaseName = System.IO.Path.GetFileName(pngPath);
+                                    }
+                                }
+                                else
+                                {
+                                    texturePath = pngPath;
+                                    textureExtension = ".png";
+                                    foundBaseName = System.IO.Path.GetFileName(pngPath);
+                                    
+                                    // Check global texture library again after converting path
+                                    TESLTextureLibrary.TextureEntry cachedEntry2 = TESLTextureLibrary.GetTextureByPath(pngPath);
+                                    if (cachedEntry2 != null)
+                                    {
+                                        texture = cachedEntry2.Texture;
+                                    }
+                                }
+                            }
+                            
+                            if (texture == null && textureExtension == ".tga")
+                            {
+                                string pngPath = System.IO.Path.ChangeExtension(texturePath, ".png");
+                                if (!System.IO.File.Exists(pngPath))
+                                {
+                                    // Convert TGA to PNG
+                                    byte[] tgaData = System.IO.File.ReadAllBytes(texturePath);
+                                    Texture2D tempTexture = new Texture2D(2, 2);
+                                    if (tempTexture.LoadImage(tgaData))
+                                    {
+                                        byte[] pngData = tempTexture.EncodeToPNG();
+                                        System.IO.File.WriteAllBytes(pngPath, pngData);
+                                        #if UNITY_EDITOR
+                                        SetTextureImportSettings(pngPath);
+                                        #endif
+                                        texturePath = pngPath;
+                                        textureExtension = ".png";
+                                        foundBaseName = System.IO.Path.GetFileName(pngPath);
+                                        UnityEngine.Object.DestroyImmediate(tempTexture);
+                                    }
+                                    else
+                                    {
+                                        UnityEngine.Object.DestroyImmediate(tempTexture);
+                                    }
+                                }
+                                else
+                                {
+                                    texturePath = pngPath;
+                                    textureExtension = ".png";
+                                    foundBaseName = System.IO.Path.GetFileName(pngPath);
+                                    
+                                    // Check global texture library again after converting path
+                                    TESLTextureLibrary.TextureEntry cachedEntry3 = TESLTextureLibrary.GetTextureByPath(pngPath);
+                                    if (cachedEntry3 != null)
+                                    {
+                                        texture = cachedEntry3.Texture;
+                                    }
+                                }
+                            }
+                            
+                            if (texture == null && textureExtension == ".png")
+                            {
+                                // Final check with global texture library
+                                TESLTextureLibrary.TextureEntry cachedEntry4 = TESLTextureLibrary.GetTextureByPath(texturePath);
+                                if (cachedEntry4 != null)
+                                {
+                                    texture = cachedEntry4.Texture;
+                                }
+                                else
+                                {
+                                    // Load texture and add to global library
+                                    byte[] textureData = System.IO.File.ReadAllBytes(texturePath);
+                                    texture = new Texture2D(2, 2);
+                                    
+                                    if (texture.LoadImage(textureData))
+                                    {
+                                        texture.wrapMode = TextureWrapMode.Repeat;
+                                        texture.filterMode = FilterMode.Bilinear;
+                                        texture.anisoLevel = 9;
+                                        
+                                        #if UNITY_EDITOR
+                                        texture.Apply(true, false);
+                                        #else
+                                        texture.Apply(false, false);
+                                        #endif
+                                        
+                                        // Add to global texture library
+                                        string textureName = names.primary ?? names.fallback ?? foundBaseName ?? System.IO.Path.GetFileNameWithoutExtension(texturePath);
+                                        TESLTextureLibrary.AddTexture(textureName, ltexIndex, vtexIndex, texturePath, texture);
+                                    }
+                                    else
+                                    {
+                                        usePlaceholder = true;
+                                    }
+                                }
+                            }
+                        }
+                        catch (System.Exception ex)
+                        {
+                            UnityEngine.Debug.LogWarning($"Error loading texture {texturePath}: {ex.Message}, using placeholder");
+                            usePlaceholder = true;
+                        }
+                    }
+                    else if (texture == null)
+                    {
+                        usePlaceholder = true;
+                    }
+                    
+                    if (usePlaceholder || texture == null)
+                    {
+                        string placeholderName = foundBaseName ?? names.primary ?? names.fallback ?? $"Index_{ltexIndex}";
+                        texture = CreatePlaceholderTexture($"Placeholder_{placeholderName}", new Color(0.7f, 0.5f, 0.3f, 1f));
+                    }
+                    
+                    TerrainLayer layer = new TerrainLayer();
+                    layer.diffuseTexture = texture;
+                    layer.tileSize = new Vector2(8, 8);
+                    layer.tileOffset = Vector2.zero;
+                    layer.metallic = 0.0f;
+                    layer.smoothness = 0.1f;
+                    
+                    _sharedTerrainLayers.Add(layer);
+                    int assignedLayerIndex = _sharedTerrainLayers.Count - 1;
+                    _textureIndexToLayerIndex[vtexIndex] = assignedLayerIndex;
+                }
+            }
+            
+            if (_sharedTerrainLayers.Count == 0)
+            {
+                UnityEngine.Debug.LogWarning("No terrain layers found, creating default placeholder layer.");
+                TerrainLayer defaultLayer = new TerrainLayer();
+                defaultLayer.diffuseTexture = placeholderTexture;
+                defaultLayer.tileSize = new Vector2(8, 8);
+                defaultLayer.tileOffset = Vector2.zero;
+                defaultLayer.metallic = 0.0f;
+                defaultLayer.smoothness = 0.1f;
+                _sharedTerrainLayers.Add(defaultLayer);
+            }
+            
+            UnityEngine.Debug.Log($"=== GenerateHeightMap_Cells: Complete - {cellData.Count} cells, {_sharedTerrainLayers.Count} terrain layers ===");
+        }
+        
+        /// <summary>
+        /// Saves a single cell's height data as a RAW file for faster per-cell terrain generation
+        /// Uses global min/max for normalization to maintain relative heights between cells
+        /// </summary>
+        private void SaveCellRawFile(int cellX, int cellY, float[][] cellHeights, float globalMinHeight, float globalMaxHeight)
+        {
+            const int CELL = 65;
+            
+            // Use global min/max for normalization to maintain relative heights between cells
+            float globalHeightRange = globalMaxHeight - globalMinHeight;
+            if (globalHeightRange < 0.001f) globalHeightRange = 1f;
+            
+            // Create RAW file (16-bit little-endian)
+            byte[] rawBytes = new byte[CELL * CELL * 2]; // 2 bytes per pixel (16-bit)
+            int byteIndex = 0;
+            
+            for (int y = 0; y < CELL; y++)
+            {
+                for (int x = 0; x < CELL; x++)
+                {
+                    // Normalize height to 0-1 range using global min/max
+                    float normalizedHeight = (cellHeights[y][x] - globalMinHeight) / globalHeightRange;
+                    normalizedHeight = Mathf.Clamp01(normalizedHeight);
+                    
+                    // Convert to 16-bit (0-65535)
+                    ushort heightValue = (ushort)(normalizedHeight * 65535.0f);
+                    
+                    // Write as little-endian (LSB first, then MSB)
+                    rawBytes[byteIndex++] = (byte)(heightValue & 0xFF);        // LSB
+                    rawBytes[byteIndex++] = (byte)((heightValue >> 8) & 0xFF); // MSB
+                }
+            }
+            
+            // Save to Cache/Cells directory
+            string cellsDir = System.IO.Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Cells", _esm);
+            Directory.CreateDirectory(cellsDir);
+            string rawFilePath = System.IO.Path.Combine(cellsDir, $"Cell_{cellX}_{cellY}.raw");
+            System.IO.File.WriteAllBytes(rawFilePath, rawBytes);
+        }
+        
+        /// <summary>
+        /// Loads a single cell's height data from RAW file
+        /// </summary>
+        private float[,] LoadCellRawFile(int cellX, int cellY, out float minHeight, out float maxHeight)
+        {
+            const int CELL = 65;
+            minHeight = 0f;
+            maxHeight = 1f;
+            
+            string cellsDir = System.IO.Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Cells", _esm);
+            string rawFilePath = System.IO.Path.Combine(cellsDir, $"Cell_{cellX}_{cellY}.raw");
+            
+            if (!File.Exists(rawFilePath))
+            {
+                UnityEngine.Debug.LogWarning($"Cell RAW file not found: {rawFilePath}");
+                return new float[CELL, CELL]; // Return empty array
+            }
+            
+            byte[] rawData = File.ReadAllBytes(rawFilePath);
+            float[,] cellHeights = new float[CELL, CELL];
+            
+            // Read RAW data (16-bit little-endian)
+            int byteIndex = 0;
+            for (int y = 0; y < CELL; y++)
+            {
+                for (int x = 0; x < CELL; x++)
+                {
+                    if (byteIndex + 1 < rawData.Length)
+                    {
+                        ushort heightValue = (ushort)(rawData[byteIndex] | (rawData[byteIndex + 1] << 8));
+                        cellHeights[y, x] = heightValue / 65535.0f; // Normalize to 0-1
+                        
+                        if (cellHeights[y, x] < minHeight) minHeight = cellHeights[y, x];
+                        if (cellHeights[y, x] > maxHeight) maxHeight = cellHeights[y, x];
+                    }
+                    byteIndex += 2;
+                }
+            }
+            
+            return cellHeights;
+        }
+
+        /// <summary>
+        /// TEST FUNCTION: Generate heightmap using merged_lands algorithm exactly
+        /// This resets height at the start of each row to the first column value, preventing scanlines
+        /// </summary>
+        public void GenerateHeightMap_MergedLands(Record[] _records, string esm = "Morrowind")
+        {
+            _esm = System.IO.Path.GetFileNameWithoutExtension(esm);
+            
+            UnityEngine.Debug.Log("=== GenerateHeightMap_MergedLands: Starting test heightmap generation ===");
+            
+            // Calculate dimensions (matching old GenerateHeightMap calculation)
+            // Note: This uses (Abs(Min) + Max) which gives one less cell than (Max - Min + 1)
+            // but matches the cell positioning calculation below
+            int width = (Math.Abs(Convert.ToInt32(MinCellX)) + Convert.ToInt32(MaxCellX)) * 65;
+            int height = (Math.Abs(Convert.ToInt32(MinCellY)) + Convert.ToInt32(MaxCellY)) * 65;
+            
+            UnityEngine.Debug.Log($"Heightmap dimensions: {width}x{height}");
+            
+            // Create global height array (no count array needed - direct write)
+            float[][] globalHeights = new float[height][];
+            for (int i = 0; i < height; i++)
+            {
+                globalHeights[i] = new float[width];
+            }
+            
+            const int CELL = 65;
+            const int STEP = 65;
+            const int HALF = CELL / 2;
+            // Use global constant from TESGlobals
+            
+            int cx = width / 2;
+            int cy = height / 2;
+            
+            // Collect cell data (offset and deltas)
+            Dictionary<(int x, int y), (float offset, sbyte[][] deltas)> cellData = 
+                new Dictionary<(int, int), (float, sbyte[][])>();
+            
+            foreach (Record recs in _records)
+            {
+                RecordLand landRecord = recs as RecordLand;
+                if (landRecord != null)
+                {
+                    SubRecordLandINTV intv = null;
+                    float offset = 0f;
+                    sbyte[][] deltas = null;
+                    
+                    if (landRecord.subRecords != null)
+                    {
+                        foreach (SubRecords subrecs in landRecord.subRecords)
+                        {
+                            if (subrecs == null || subrecs.type == null) continue;
+                            
+                            if (subrecs.type == "INTV")
+                            {
+                                intv = subrecs as SubRecordLandINTV;
+                            }
+                            if (subrecs.type == "VHGT")
+                            {
+                                SubRecordLandVHGT subrecordLandVHGT = subrecs as SubRecordLandVHGT;
+                                if (subrecordLandVHGT != null)
+                                {
+                                    offset = subrecordLandVHGT.offset;
+                                    deltas = subrecordLandVHGT.heightdata;
+                                }
+                            }
+                        }
+                    }
+                    
+                    if (intv != null && deltas != null)
+                    {
+                        try
+                        {
+                            int cellX = Convert.ToInt32(intv.CellX);
+                            int cellY = Convert.ToInt32(intv.CellY);
+                            cellData[(cellX, cellY)] = (offset, deltas);
+                        }
+                        catch (System.Exception ex)
+                        {
+                            UnityEngine.Debug.LogWarning($"Failed to process cell data: {ex.Message}");
+                        }
+                    }
+                }
+            }
+            
+            UnityEngine.Debug.Log($"Found {cellData.Count} land cells");
+            
+            // Dictionary to store processed cell heights for neighbor lookups
+            Dictionary<(int x, int y), float[][]> cellHeights = new Dictionary<(int, int), float[][]>();
+            
+            // Process cells in sorted order (bottom-left to top-right) to ensure neighbors are calculated first
+            var sortedCells = cellData.Keys.OrderBy(c => c.y).ThenBy(c => c.x).ToList();
+            
+            // Process each cell using OpenMW's algorithm with neighbor alignment (like CalculateCellHeightsWithNeighbors)
+            foreach (var (cellX, cellY) in sortedCells)
+            {
+                var (offset, deltas) = cellData[(cellX, cellY)];
+                
+                // Calculate cell position in global array
+                int startX = (cellX - Convert.ToInt32(MinCellX)) * CELL;
+                int startY = (cellY - Convert.ToInt32(MinCellY)) * CELL;
+                
+                // Use integer arithmetic first (like OpenMW and CalculateCellHeightsWithNeighbors)
+                // Maintain unscaled integer value throughout to avoid precision loss
+                int rowOffset = (int)offset; // Start with offset (unscaled)
+                
+                // Temporary array for this cell's heights (2D for easier neighbor access)
+                float[][] cellHeightsArray = new float[CELL][];
+                for (int i = 0; i < CELL; i++)
+                {
+                    cellHeightsArray[i] = new float[CELL];
+                }
+                
+                // Store unscaled integer values for each row's first column to avoid precision loss
+                // when converting back from float for subsequent rows
+                int[] rowFirstColumnUnscaled = new int[CELL];
+                
+                // Process each row with neighbor alignment (like CalculateCellHeightsWithNeighbors)
+                for (int y = 0; y < CELL; y++)
+                {
+                    // At start of each row, align with neighbors
+                    // Priority: bottom neighbor (row 0 only) > left neighbor > previous row
+                    if (y == 0)
+                    {
+                        // Row 0: Check bottom neighbor first, then left neighbor
+                        if (cellY > Convert.ToInt32(MinCellY) && cellHeights.ContainsKey((cellX, cellY - 1)))
+                        {
+                            // Align with bottom neighbor's top edge
+                            // Use row 64 (top edge) and column 0 (first column) to match exactly
+                            float[][] bottomCell = cellHeights[(cellX, cellY - 1)];
+                            float neighborHeight = bottomCell[CELL - 1][0]; // Use row 64, column 0
+                            rowOffset = (int)Math.Round(neighborHeight / TESGlobals.HEIGHT_MAP_SCALE_FACTOR);
+                        }
+                        else if (cellX > Convert.ToInt32(MinCellX) && cellHeights.ContainsKey((cellX - 1, cellY)))
+                        {
+                            // No bottom neighbor: align with left neighbor's row 0, column 63
+                            // This ensures leftmost cells without bottom neighbors still align horizontally
+                            float[][] leftCell = cellHeights[(cellX - 1, cellY)];
+                            float neighborHeight = leftCell[0][63]; // Use row 0, column 63
+                            rowOffset = (int)Math.Round(neighborHeight / TESGlobals.HEIGHT_MAP_SCALE_FACTOR);
+                        }
+                        else
+                        {
+                            // No neighbors: explicitly reset to offset to ensure clean start
+                            // This is the critical case - use the offset directly without conversion
+                            rowOffset = (int)offset;
+                        }
+                    }
+                    else
+                    {
+                        // Subsequent rows: Check left neighbor first, then use previous row
+                        if (cellX > Convert.ToInt32(MinCellX) && cellHeights.ContainsKey((cellX - 1, cellY)))
+                        {
+                            // Align with left neighbor (use column 63 instead of 64 to avoid edge artifacts)
+                            float[][] leftCell = cellHeights[(cellX - 1, cellY)];
+                            float neighborHeight = leftCell[y][63]; // Use column 63
+                            rowOffset = (int)Math.Round(neighborHeight / TESGlobals.HEIGHT_MAP_SCALE_FACTOR);
+                        }
+                        else
+                        {
+                            // Standard row reset: use first column's unscaled integer value from previous row
+                            // This avoids precision loss from float-to-int conversion
+                            rowOffset = rowFirstColumnUnscaled[y - 1];
+                        }
+                    }
+                    
+                    // OpenMW's algorithm: add first column's delta, then accumulate horizontally
+                    // rowOffset += vhgt.mHeightData[y * LandRecordData::sLandSize];
+                    rowOffset += deltas[y][0];
+                    
+                    // Store unscaled value for next row to avoid precision loss
+                    rowFirstColumnUnscaled[y] = rowOffset;
+                    
+                    // data.mHeights[y * LandRecordData::sLandSize] = rowOffset * Land::sHeightScale;
+                    cellHeightsArray[y][0] = rowOffset * TESGlobals.HEIGHT_MAP_SCALE_FACTOR;
+                    
+                    // float colOffset = rowOffset;
+                    int colOffset = rowOffset;
+                    
+                    // for (unsigned x = 1; x < LandRecordData::sLandSize; x++)
+                    for (int x = 1; x < CELL; x++)
+                    {
+                        // colOffset += vhgt.mHeightData[y * LandRecordData::sLandSize + x];
+                        colOffset += deltas[y][x];
+                        
+                        // data.mHeights[x + y * LandRecordData::sLandSize] = colOffset * Land::sHeightScale;
+                        cellHeightsArray[y][x] = colOffset * TESGlobals.HEIGHT_MAP_SCALE_FACTOR;
+                    }
+                }
+                
+                // Store for neighbor lookups
+                cellHeights[(cellX, cellY)] = cellHeightsArray;
+                
+                // Write to global array
+                for (int ly = 0; ly < CELL; ly++)
+                {
+                    int py = startY + ly;
+                    if (py < 0 || py >= height) continue;
+                    
+                    for (int lx = 0; lx < CELL; lx++)
+                    {
+                        int px = startX + lx;
+                        if (px < 0 || px >= width) continue;
+                        
+                        globalHeights[py][px] = cellHeightsArray[ly][lx];
+                    }
+                }
+            }
+            
+            // Find global min/max for normalization
+            float globalMinHeight = float.MaxValue;
+            float globalMaxHeight = float.MinValue;
+            bool foundValidHeight = false;
+            
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    float h = globalHeights[y][x];
+                    if (h != 0f || foundValidHeight) // Allow 0 if we've found other heights
+                    {
+                        if (!foundValidHeight)
+                        {
+                            globalMinHeight = h;
+                            globalMaxHeight = h;
+                            foundValidHeight = true;
+                        }
+                        else
+                        {
+                            if (h < globalMinHeight) globalMinHeight = h;
+                            if (h > globalMaxHeight) globalMaxHeight = h;
+                        }
+                    }
+                }
+            }
+            
+            UnityEngine.Debug.Log($"Height range: min={globalMinHeight}, max={globalMaxHeight}");
+            
+            // Extract 64x64 chunks from each cell (skip the 65th row/column which is for neighbor alignment)
+            // Calculate number of cells using the same formula as RAW generation: (Abs(Min) + Max)
+            // This matches the calculation used in GenerateHeightMap_MergedLands for width/height
+            int numCellsX = (Math.Abs(Convert.ToInt32(MinCellX)) + Convert.ToInt32(MaxCellX));
+            int numCellsY = (Math.Abs(Convert.ToInt32(MinCellY)) + Convert.ToInt32(MaxCellY));
+            int extractedWidth = numCellsX * 64;  // 64 samples per cell
+            int extractedHeight = numCellsY * 64; // 64 samples per cell
+            
+            // Create extracted heightmap (64x64 per cell)
+            float[][] extractedHeights = new float[extractedHeight][];
+            for (int i = 0; i < extractedHeight; i++)
+            {
+                extractedHeights[i] = new float[extractedWidth];
+            }
+            
+            // Extract 64x64 chunks from the 65x65 cell data
+            for (int cellY = 0; cellY < numCellsY; cellY++)
+            {
+                for (int cellX = 0; cellX < numCellsX; cellX++)
+                {
+                    // Source position in 65x65 grid
+                    int srcCellStartX = cellX * (int)TESGlobals.HEIGHTMAP_CELL_SIZE;
+                    int srcCellStartY = cellY * (int)TESGlobals.HEIGHTMAP_CELL_SIZE;
+                    
+                    // Destination position in 64x64 grid
+                    int dstCellStartX = cellX * (int)TESGlobals.CELL_SIZE;
+                    int dstCellStartY = cellY * (int)TESGlobals.CELL_SIZE;
+                    
+                    // Copy 64x64 chunk (excluding the 65th row/column)
+                    for (int localY = 0; localY < 64; localY++)
+                    {
+                        for (int localX = 0; localX < 64; localX++)
+                        {
+                            int srcX = srcCellStartX + localX;
+                            int srcY = srcCellStartY + localY;
+                            int dstX = dstCellStartX + localX;
+                            int dstY = dstCellStartY + localY;
+                            
+                            if (srcX < width && srcY < height && dstX < extractedWidth && dstY < extractedHeight)
+                            {
+                                extractedHeights[dstY][dstX] = globalHeights[srcY][srcX];
+                            }
+                        }
+                    }
+                }
+            }
+            
+            UnityEngine.Debug.Log($"Extracted heightmap dimensions: {extractedWidth}x{extractedHeight} (from {width}x{height} with 64x64 per cell)");
+            
+            // Generate PNG from extracted heightmap
+            Texture2D heightTexture = new Texture2D(extractedWidth, extractedHeight, TextureFormat.RGBA32, false);
+            Color[] heightPixels = new Color[extractedWidth * extractedHeight];
+            
+            if (foundValidHeight)
+            {
+                // Normalize from actual terrain min/max to preserve brightness
+                // This ensures the terrain uses the full brightness range (0-1)
+                float globalHeightRange = globalMaxHeight - globalMinHeight;
+                if (globalHeightRange < 0.001f) globalHeightRange = 1f; // Avoid division by zero
+                
+                UnityEngine.Debug.Log($"PNG export: Normalizing from actual terrain min={globalMinHeight}, max={globalMaxHeight}, range={globalHeightRange}");
+                
+                for (int y = 0; y < extractedHeight; y++)
+                {
+                    for (int x = 0; x < extractedWidth; x++)
+                    {
+                        float h = extractedHeights[y][x];
+                        // Normalize: min maps to 0.0 (black), max maps to 1.0 (white)
+                        float heightValue = (h - globalMinHeight) / globalHeightRange;
+                        heightValue = Mathf.Clamp01(heightValue);
+                        heightPixels[y * extractedWidth + x] = new UnityEngine.Color(heightValue, heightValue, heightValue, 1f);
+                    }
+                }
+            }
+            
+            heightTexture.SetPixels(heightPixels);
+            heightTexture.Apply();
+            
+            // Save PNG
+            Directory.CreateDirectory(Application.dataPath + "/StreamingAssets/Data/UOMW/Cache");
+            byte[] hbytes = heightTexture.EncodeToPNG();
+            string hfilePath = Application.dataPath + "/StreamingAssets/Data/UOMW/Cache/" + _esm + "_MapHeight_MergedLands.png";
+            System.IO.File.WriteAllBytes(hfilePath, hbytes);
+            
+            UnityEngine.Debug.Log($"=== GenerateHeightMap_MergedLands: Saved test heightmap to {hfilePath} ===");
+            
+            // Export RAW file for Unity terrain (16-bit grayscale, little-endian)
+            if (foundValidHeight)
+            {
+                // Normalize from actual terrain min/max to preserve brightness
+                // This ensures the terrain uses the full 16-bit range (0-65535)
+                float globalHeightRange = globalMaxHeight - globalMinHeight;
+                if (globalHeightRange < 0.001f) globalHeightRange = 1f; // Avoid division by zero
+                
+                UnityEngine.Debug.Log($"RAW export: Normalizing from actual terrain min={globalMinHeight}, max={globalMaxHeight}, range={globalHeightRange}");
+                
+                // RAW format: 16-bit unsigned short (ushort) per pixel, little-endian
+                // No header, just raw pixel data
+                byte[] rawBytes = new byte[width * height * 2]; // 2 bytes per pixel (16-bit)
+                int byteIndex = 0;
+                
+                for (int y = 0; y < height; y++)
+                {
+                    for (int x = 0; x < width; x++)
+                    {
+                        float h = globalHeights[y][x];
+                        // Normalize: min maps to 0.0 (black), max maps to 1.0 (white)
+                        float heightValue = (h - globalMinHeight) / globalHeightRange;
+                        heightValue = Mathf.Clamp01(heightValue);
+                        
+                        // Convert to 16-bit (0-65535)
+                        ushort rawHeightValue = (ushort)(heightValue * 65535.0f);
+                        
+                        // Write as little-endian (LSB first, then MSB)
+                        rawBytes[byteIndex++] = (byte)(rawHeightValue & 0xFF);        // LSB
+                        rawBytes[byteIndex++] = (byte)((rawHeightValue >> 8) & 0xFF); // MSB
+                    }
+                }
+                
+                string rawFilePath = Application.dataPath + "/StreamingAssets/Data/UOMW/Cache/" + _esm + "_MapHeight.raw";
+                System.IO.File.WriteAllBytes(rawFilePath, rawBytes);
+                UnityEngine.Debug.Log($"Exported RAW heightmap to: {rawFilePath} (Size: {width}x{height}, 16-bit), " +
+                    $"normalized from min={globalMinHeight} to max={globalMaxHeight}");
+                
+                // Save min/max heights to a JSON file for terrain height calculation
+                // This matches OpenMW's approach of tracking actual min/max from terrain data
+                string heightRangePath = Application.dataPath + "/StreamingAssets/Data/UOMW/Cache/" + _esm + "_MapHeight_Range.json";
+                string heightRangeJson = $"{{\"minHeight\":{globalMinHeight},\"maxHeight\":{globalMaxHeight},\"heightRange\":{globalHeightRange}}}";
+                System.IO.File.WriteAllText(heightRangePath, heightRangeJson);
+                UnityEngine.Debug.Log($"Saved height range to: {heightRangePath} (min={globalMinHeight}, max={globalMaxHeight}, range={globalHeightRange})");
+            }
         }
 
         public void GenerateHeightMap(Record[] _records, string esm = "Morrowind")
@@ -1818,7 +3208,7 @@ namespace ESMSharp.TES3Terrain
 
 
                     BlitCellJagged_DeltasGray_NoSeams(pixels, width, height, cellx, celly, MinCellX, MaxCellX, MinCellY, MaxCellY, heightdata /*byte[65][65]*/);
-                    BlitCellNormals_NoSeams(npixels, width, height, cellx, celly, MinCellX, MaxCellX,MinCellY, MaxCellY, normdata /*byte[65][65]*/);
+                    BlitCellNormals_NoSeams(npixels, width, height, cellx, celly, MinCellX, MaxCellX, MinCellY, MaxCellY, normdata /*byte[65][65]*/);
                     if (colordata != null)
                     {
                         BlitCellColors_NoSeams(colorPixels, width, height, cellx, celly, MinCellX, MaxCellX, MinCellY, MaxCellY, colordata);
@@ -1979,25 +3369,25 @@ namespace ESMSharp.TES3Terrain
             newTexture.SetPixels(pixels);
             newTexture.Apply();
             byte[] bytes = newTexture.EncodeToPNG(); // or texture2D.EncodeToJPG(quality)
-            string filePath = Application.dataPath + "/StreamingAssets/Data/UOMW/Cache/"+ _esm + "_MapBumps.png"; // Or any desired path
+            string filePath = Application.dataPath + "/StreamingAssets/Data/UOMW/Cache/" + _esm + "_MapBumps.png"; // Or any desired path
             System.IO.File.WriteAllBytes(filePath, bytes);
 
             normTexture.SetPixels(npixels);
             normTexture.Apply();
             byte[] nbytes = normTexture.EncodeToPNG(); // or texture2D.EncodeToJPG(quality)
-            string nfilePath = Application.dataPath + "/StreamingAssets/Data/UOMW/Cache/"+ _esm + "_MapNorms.png"; // Or any desired path
+            string nfilePath = Application.dataPath + "/StreamingAssets/Data/UOMW/Cache/" + _esm + "_MapNorms.png"; // Or any desired path
             System.IO.File.WriteAllBytes(nfilePath, nbytes);
 
             heightTexture.SetPixels(heightPixels);
             heightTexture.Apply();
             byte[] hbytes = heightTexture.EncodeToPNG(); // or texture2D.EncodeToJPG(quality)
-            string hfilePath = Application.dataPath + "/StreamingAssets/Data/UOMW/Cache/"+ _esm + "_MapHeight.png"; // Or any desired path
+            string hfilePath = Application.dataPath + "/StreamingAssets/Data/UOMW/Cache/" + _esm + "_MapHeight.png"; // Or any desired path
             System.IO.File.WriteAllBytes(hfilePath, hbytes);
 
             colorTexture.SetPixels(colorPixels);
             colorTexture.Apply();
             byte[] cbytes = colorTexture.EncodeToPNG(); // or texture2D.EncodeToJPG(quality)
-            string cfilePath = Application.dataPath + "/StreamingAssets/Data/UOMW/Cache/"+ _esm + "_MapColors.png"; // Or any desired path
+            string cfilePath = Application.dataPath + "/StreamingAssets/Data/UOMW/Cache/" + _esm + "_MapColors.png"; // Or any desired path
             System.IO.File.WriteAllBytes(cfilePath, cbytes);
             
             // Export RAW file for Unity terrain (16-bit grayscale, little-endian)
@@ -2050,7 +3440,7 @@ namespace ESMSharp.TES3Terrain
                     }
                 }
                 
-                string rawFilePath = Application.dataPath + "/StreamingAssets/Data/UOMW/Cache/"+ _esm + "_MapHeight.raw";
+                string rawFilePath = Application.dataPath + "/StreamingAssets/Data/UOMW/Cache/" + _esm + "_MapHeight.raw";
                 System.IO.File.WriteAllBytes(rawFilePath, rawBytes);
                 UnityEngine.Debug.Log($"Exported RAW heightmap to: {rawFilePath} (Size: {width}x{height}, 16-bit), " +
                     $"normalized from sea level (0) to max height ({MORROWIND_MAX_HEIGHT})");
@@ -2177,7 +3567,6 @@ namespace ESMSharp.TES3Terrain
 
         }
 
-
         public void BlitCellJagged_DeltasGray_NoSeams(
             UnityEngine.Color[] pixels, int W, int H,
             int cellX, int cellY,
@@ -2188,7 +3577,7 @@ namespace ESMSharp.TES3Terrain
         )
         {
             const int CELL = 65;   // samples per tile
-            const int STEP = 64;   // spacing between cell origins (critical)
+            const int STEP = 65;   // spacing between cell origins (critical) - matches heightmap samples per cell
             const int HALF = CELL / 2; // 32
 
             int cx = W / 2, cy = H / 2;
@@ -2351,106 +3740,6 @@ namespace ESMSharp.TES3Terrain
                 }
             }
         }
-
-        // Calculate cell heights from deltas and offset (without writing to global array)
-        private float[][] CalculateCellHeights(sbyte[][] deltas, float offset)
-        {
-            const int CELL = 65;
-            const float HEIGHT_MAP_SCALE_FACTOR = 8.0f;
-            
-            float[][] absoluteHeights = new float[CELL][];
-            for (int i = 0; i < CELL; i++)
-            {
-                absoluteHeights[i] = new float[CELL];
-            }
-            
-            // Reconstruct absolute heights from deltas and offset
-            int heightInt = (int)offset;
-            
-            for (int y = 0; y < CELL; y++)
-            {
-                for (int x = 0; x < CELL; x++)
-                {
-                    heightInt += deltas[y][x];
-                    absoluteHeights[y][x] = heightInt;
-                }
-                heightInt = (int)absoluteHeights[y][0];
-            }
-            
-            // Apply scale factor
-            for (int y = 0; y < CELL; y++)
-            {
-                for (int x = 0; x < CELL; x++)
-                {
-                    absoluteHeights[y][x] *= HEIGHT_MAP_SCALE_FACTOR;
-                }
-            }
-            
-            return absoluteHeights;
-        }
-        
-        // Align cell boundaries with neighbors by adjusting boundary heights
-        // Process cells in order (left-to-right, top-to-bottom) to propagate alignment
-        private void AlignCellBoundaries(float[][] cellHeight, int cellX, int cellY, 
-            Dictionary<(int x, int y), float[][]> allCellHeights,
-            int minCellX, int maxCellX, int minCellY, int maxCellY)
-        {
-            const int CELL = 65;
-            float totalAdjustment = 0f;
-            int adjustmentCount = 0;
-            
-            // Check left neighbor: align left edge of this cell with right edge of left cell
-            if (cellX > minCellX && allCellHeights.ContainsKey((cellX - 1, cellY)))
-            {
-                float[][] leftCell = allCellHeights[(cellX - 1, cellY)];
-                // Average height along the shared edge (left cell's right edge, this cell's left edge)
-                float leftEdgeAvg = 0f;
-                float rightEdgeAvg = 0f;
-                for (int y = 0; y < CELL; y++)
-                {
-                    leftEdgeAvg += leftCell[y][64]; // Left cell's right edge (x=64)
-                    rightEdgeAvg += cellHeight[y][0]; // This cell's left edge (x=0)
-                }
-                leftEdgeAvg /= CELL;
-                rightEdgeAvg /= CELL;
-                float diff = leftEdgeAvg - rightEdgeAvg;
-                totalAdjustment += diff;
-                adjustmentCount++;
-            }
-            
-            // Check top neighbor: align top edge of this cell with bottom edge of top cell
-            if (cellY > minCellY && allCellHeights.ContainsKey((cellX, cellY - 1)))
-            {
-                float[][] topCell = allCellHeights[(cellX, cellY - 1)];
-                // Average height along the shared edge (top cell's bottom edge, this cell's top edge)
-                float topEdgeAvg = 0f;
-                float bottomEdgeAvg = 0f;
-                for (int x = 0; x < CELL; x++)
-                {
-                    topEdgeAvg += topCell[64][x]; // Top cell's bottom edge (y=64)
-                    bottomEdgeAvg += cellHeight[0][x]; // This cell's top edge (y=0)
-                }
-                topEdgeAvg /= CELL;
-                bottomEdgeAvg /= CELL;
-                float diff = topEdgeAvg - bottomEdgeAvg;
-                totalAdjustment += diff;
-                adjustmentCount++;
-            }
-            
-            // Apply average adjustment if we have any neighbors
-            if (adjustmentCount > 0)
-            {
-                float adjustment = totalAdjustment / adjustmentCount;
-                // Apply adjustment to entire cell
-                for (int y = 0; y < CELL; y++)
-                {
-                    for (int x = 0; x < CELL; x++)
-                    {
-                        cellHeight[y][x] += adjustment;
-                    }
-                }
-            }
-        }
         
         // Calculate cell heights with neighbor alignment
         // When resetting at the start of each row, use neighbor heights if available
@@ -2462,7 +3751,7 @@ namespace ESMSharp.TES3Terrain
             int minCellX, int maxCellX, int minCellY, int maxCellY)
         {
             const int CELL = 65;
-            const float HEIGHT_MAP_SCALE_FACTOR = 8.0f;
+            // Use global constant from TESGlobals
             
             float[][] absoluteHeights = new float[CELL][];
             for (int i = 0; i < CELL; i++)
@@ -2487,11 +3776,12 @@ namespace ESMSharp.TES3Terrain
                 // This fixes the mosaic effect by ensuring cells align at boundaries
                 if (y == 0 && cellY > minCellY && cellHeights.ContainsKey((cellX, cellY - 1)))
                 {
-                    // Align with bottom neighbor's top edge, but use row 62 instead of 64 to avoid edge artifacts
+                    // Align with bottom neighbor's top edge, but use row 64 and column 1 to avoid edge artifacts
                     // The outermost rows (64, 63) might have artifacts, so use two pixels in
+                    // Since we're reading from the top of the bottom neighbor cell, use column 2 to avoid edge artifacts
                     float[][] bottomCell = cellHeights[(cellX, cellY - 1)];
-                    float neighborHeight = bottomCell[62][0]; // Use row 62 instead of 64 to avoid edge artifacts
-                    heightInt = (int)Math.Round(neighborHeight / HEIGHT_MAP_SCALE_FACTOR);
+                    float neighborHeight = bottomCell[63][1]; // Use row 64, column 1 (top edge of bottom neighbor, further in to avoid artifacts)
+                    heightInt = (int)Math.Round(neighborHeight / TESGlobals.HEIGHT_MAP_SCALE_FACTOR);
                 }
                 else if (cellX > minCellX && cellHeights.ContainsKey((cellX - 1, cellY)))
                 {
@@ -2499,7 +3789,7 @@ namespace ESMSharp.TES3Terrain
                     // The outermost column (64) might have artifacts that propagate, so use one pixel in
                     float[][] leftCell = cellHeights[(cellX - 1, cellY)];
                     float neighborHeight = leftCell[y][63]; // Use column 63 instead of 64 to avoid edge artifacts
-                    heightInt = (int)Math.Round(neighborHeight / HEIGHT_MAP_SCALE_FACTOR);
+                    heightInt = (int)Math.Round(neighborHeight / TESGlobals.HEIGHT_MAP_SCALE_FACTOR);
                 }
                 else if (y > 0)
                 {
@@ -2510,7 +3800,7 @@ namespace ESMSharp.TES3Terrain
                     // Actually, we can't avoid this conversion since we're storing as float
                     // But we can be more precise by avoiding rounding
                     float prevRowFirstHeight = absoluteHeights[y - 1][0];
-                    heightInt = (int)(prevRowFirstHeight / HEIGHT_MAP_SCALE_FACTOR + 0.5f);
+                    heightInt = (int)(prevRowFirstHeight / TESGlobals.HEIGHT_MAP_SCALE_FACTOR + 0.5f);
                 }
                 
                 // Accumulate across this row
@@ -2529,7 +3819,7 @@ namespace ESMSharp.TES3Terrain
             {
                 for (int x = 0; x < CELL; x++)
                 {
-                    absoluteHeights[y][x] *= HEIGHT_MAP_SCALE_FACTOR;
+                    absoluteHeights[y][x] *= TESGlobals.HEIGHT_MAP_SCALE_FACTOR;
                 }
             }
             
@@ -2592,6 +3882,7 @@ namespace ESMSharp.TES3Terrain
             }
         }
         
+        
         public void BlitCellHeightMap_CollectHeights(
             float[][] globalHeights, int[][] globalHeightsCount, VNML[][] globalNormals, int W, int H,
             int cellX, int cellY,
@@ -2604,9 +3895,9 @@ namespace ESMSharp.TES3Terrain
         )
         {
             const int CELL = 65;   // samples per tile
-            const int STEP = 64;   // spacing between cell origins (critical)
+            const int STEP = 65;   // spacing between cell origins (critical) - matches heightmap samples per cell
             const int HALF = CELL / 2; // 32
-            const float HEIGHT_MAP_SCALE_FACTOR = 8.0f; // TES3 height scale factor
+            // Use global constant from TESGlobals // TES3 height scale factor
 
             int cx = W / 2, cy = H / 2;
 
@@ -2663,7 +3954,7 @@ namespace ESMSharp.TES3Terrain
             {
                 for (int x = 0; x < CELL; x++)
                 {
-                    absoluteHeights[y][x] *= HEIGHT_MAP_SCALE_FACTOR;
+                    absoluteHeights[y][x] *= TESGlobals.HEIGHT_MAP_SCALE_FACTOR;
                 }
             }
 
@@ -2845,235 +4136,6 @@ namespace ESMSharp.TES3Terrain
                 }
             }
         }
-
-        private void CorrectHeightsUsingNormals(
-            float[][] globalHeights, VNML[][] globalNormals, int[][] globalHeightsCount,
-            int width, int height)
-        {
-            // Create a working copy for iterative smoothing
-            float[][] smoothedHeights = new float[height][];
-            for (int i = 0; i < height; i++)
-            {
-                smoothedHeights[i] = new float[width];
-                for (int j = 0; j < width; j++)
-                {
-                    smoothedHeights[i][j] = globalHeights[i][j];
-                }
-            }
-            
-            // Multiple passes to smooth boundaries using normal-guided blending
-            for (int pass = 0; pass < 5; pass++)
-            {
-                for (int y = 1; y < height - 1; y++)
-                {
-                    for (int x = 1; x < width - 1; x++)
-                    {
-                        if (globalHeightsCount[y][x] == 0) continue;
-                        
-                        float currentHeight = smoothedHeights[y][x];
-                        float sumHeight = currentHeight;
-                        float sumWeight = 1.0f;
-                        
-                        // Check all 4 neighbors
-                        int[] dx = { -1, 1, 0, 0 };
-                        int[] dy = { 0, 0, -1, 1 };
-                        
-                        for (int dir = 0; dir < 4; dir++)
-                        {
-                            int nx = x + dx[dir];
-                            int ny = y + dy[dir];
-                            
-                            if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
-                            if (globalHeightsCount[ny][nx] == 0) continue;
-                            
-                            float neighborHeight = smoothedHeights[ny][nx];
-                            float heightDiff = Mathf.Abs(neighborHeight - currentHeight);
-                            
-                            // If there's a large discontinuity (likely a cell boundary issue)
-                            // Lower threshold to catch more subtle misalignments
-                            if (heightDiff > 20.0f) // Threshold for detecting cell boundary issues
-                            {
-                                VNML n = globalNormals[y][x];
-                                if (n != null)
-                                {
-                                    // Decode normal
-                                    float nx_comp = n.x / 127.0f;
-                                    float ny_comp = n.y / 127.0f;
-                                    float nz_comp = n.z / 127.0f;
-                                    
-                                    // Normalize
-                                    float len = Mathf.Sqrt(nx_comp * nx_comp + ny_comp * ny_comp + nz_comp * nz_comp);
-                                    if (len > 0.001f)
-                                    {
-                                        // Use normal to determine if we should blend
-                                        // If normal suggests a gentle slope, blend more aggressively
-                                        // If normal suggests a steep slope, be more conservative
-                                        float slopeFactor = 1.0f - Mathf.Abs(nz_comp); // Higher for steeper slopes
-                                        
-                                        // Blend factor based on normal and discontinuity size
-                                        // Increase blending strength for better seam removal
-                                        float blendWeight = 0.35f * (1.0f - slopeFactor * 0.5f);
-                                        blendWeight = Mathf.Clamp01(blendWeight);
-                                        
-                                        sumHeight += neighborHeight * blendWeight;
-                                        sumWeight += blendWeight;
-                                    }
-                                }
-                                else
-                                {
-                                    // No normal available, use simple averaging with stronger blend
-                                    sumHeight += neighborHeight * 0.25f;
-                                    sumWeight += 0.25f;
-                                }
-                            }
-                        }
-                        
-                        // Update height with weighted average
-                        if (sumWeight > 1.0f)
-                        {
-                            smoothedHeights[y][x] = sumHeight / sumWeight;
-                        }
-                    }
-                }
-                
-                // Copy back for next iteration
-                for (int y = 0; y < height; y++)
-                {
-                    for (int x = 0; x < width; x++)
-                    {
-                        globalHeights[y][x] = smoothedHeights[y][x];
-                    }
-                }
-            }
-        }
-
-        private void AdjustCellOffsetsSimple(
-            Dictionary<(int x, int y), (float offset, sbyte[][] deltas)> cellData,
-            int minCellX, int maxCellX, int minCellY, int maxCellY)
-        {
-            const float HEIGHT_SCALE = 8.0f;
-            const int CELL = 65;
-            
-            // Simple approach: use first cell as reference, adjust others to minimize edge discontinuities
-            // Find first cell to use as reference
-            int refCellX = minCellX;
-            int refCellY = minCellY;
-            if (!cellData.ContainsKey((refCellX, refCellY)))
-            {
-                foreach (var kvp in cellData)
-                {
-                    refCellX = kvp.Key.x;
-                    refCellY = kvp.Key.y;
-                    break;
-                }
-            }
-            
-            if (!cellData.ContainsKey((refCellX, refCellY))) return;
-            
-            // Multiple passes to iteratively align cells
-            for (int pass = 0; pass < 3; pass++)
-            {
-                Dictionary<(int, int), float> adjustments = new Dictionary<(int, int), float>();
-                
-                foreach (var kvp in cellData)
-                {
-                    int cellX = kvp.Key.x;
-                    int cellY = kvp.Key.y;
-                    if (cellX == refCellX && cellY == refCellY) continue; // Don't adjust reference
-                    
-                    float currentOffset = kvp.Value.offset;
-                    sbyte[][] deltas = kvp.Value.deltas;
-                    
-                    float totalAdjustment = 0.0f;
-                    int neighborCount = 0;
-                    
-                    // Check left neighbor - align right edge of left cell with left edge of this cell
-                    if (cellData.ContainsKey((cellX - 1, cellY)))
-                    {
-                        var leftData = cellData[(cellX - 1, cellY)];
-                        float leftOffset = leftData.offset;
-                        sbyte[][] leftDeltas = leftData.deltas;
-                        
-                        // Calculate left neighbor's height at its right edge (x=63, since we skip 64)
-                        float leftHeight = leftOffset;
-                        for (int y = 0; y < CELL; y++)
-                        {
-                            for (int x = 0; x < CELL - 1; x++) // Skip last column (owned by neighbor)
-                            {
-                                leftHeight += leftDeltas[y][x];
-                            }
-                            if (y == 0) break; // Just first row for alignment
-                        }
-                        
-                        // Calculate this cell's height at its left edge (x=0)
-                        float thisHeight = currentOffset;
-                        for (int y = 0; y < CELL; y++)
-                        {
-                            thisHeight += deltas[y][0];
-                            if (y == 0) break; // Just first row
-                        }
-                        
-                        // Calculate adjustment needed (divide by scale since we'll scale later)
-                        float adjustment = (leftHeight - thisHeight) / HEIGHT_SCALE;
-                        totalAdjustment += adjustment;
-                        neighborCount++;
-                    }
-                    
-                    // Check top neighbor - align bottom edge of top cell with top edge of this cell
-                    if (cellData.ContainsKey((cellX, cellY - 1)))
-                    {
-                        var topData = cellData[(cellX, cellY - 1)];
-                        float topOffset = topData.offset;
-                        sbyte[][] topDeltas = topData.deltas;
-                        
-                        // Calculate top neighbor's height at its bottom edge (y=63)
-                        float topHeight = topOffset;
-                        for (int y = 0; y < CELL - 1; y++) // Skip last row
-                        {
-                            for (int x = 0; x < CELL; x++)
-                            {
-                                topHeight += topDeltas[y][x];
-                            }
-                        }
-                        
-                        // Calculate this cell's height at its top edge (y=0, first row)
-                        float thisHeight = currentOffset;
-                        for (int y = 0; y < 1; y++)
-                        {
-                            for (int x = 0; x < CELL; x++)
-                            {
-                                thisHeight += deltas[y][x];
-                            }
-                        }
-                        
-                        // Calculate adjustment needed
-                        float adjustment = (topHeight - thisHeight) / HEIGHT_SCALE;
-                        totalAdjustment += adjustment;
-                        neighborCount++;
-                    }
-                    
-                    // Average adjustments from neighbors
-                    if (neighborCount > 0)
-                    {
-                        float avgAdjustment = totalAdjustment / neighborCount;
-                        // Apply gentle adjustment (20% per pass)
-                        adjustments[(cellX, cellY)] = avgAdjustment * 0.2f;
-                    }
-                }
-                
-                // Apply adjustments
-                foreach (var adj in adjustments)
-                {
-                    var key = adj.Key;
-                    if (cellData.ContainsKey(key))
-                    {
-                        var data = cellData[key];
-                        cellData[key] = (data.offset + adj.Value, data.deltas);
-                    }
-                }
-            }
-        }
-
 
     }
 }

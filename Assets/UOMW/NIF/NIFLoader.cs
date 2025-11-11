@@ -6,6 +6,7 @@ using System.Linq;
 using BSASharp;
 using Niflib;
 using Pfim;
+using ESMSharp.TES3;
 #if UNITY_EDITOR
 using UnityEditor;
 #endif
@@ -453,7 +454,21 @@ namespace ESMSharp.NIF
 
             if (foundTexturePath != null)
             {
-                return LoadTextureFromFile(foundTexturePath);
+                // Check global texture library first
+                TESLTextureLibrary.TextureEntry cachedEntry = TESLTextureLibrary.GetTextureByPath(foundTexturePath);
+                if (cachedEntry != null)
+                {
+                    return cachedEntry.Texture;
+                }
+                
+                // Load from file and add to library
+                Texture2D texture = LoadTextureFromFile(foundTexturePath);
+                if (texture != null)
+                {
+                    // Add to global texture library (no LTEX/VTEX index for model textures)
+                    TESLTextureLibrary.AddTexture(baseNameNoExt, -1, 0, foundTexturePath, texture);
+                }
+                return texture;
             }
 
             //UnityEngine.Debug.LogWarning($"Texture not found: {texturePath}");
@@ -949,6 +964,7 @@ namespace ESMSharp.NIF
                 {
                     // Combine all render meshes into a single mesh with submeshes (each with its own material)
                     // Exclude collision meshes from render mesh (they're not needed for rendering)
+                    // For trees and grass, use isTree: true to enable alpha clipping
                     var (combinedMesh, submeshMaterials) = CombineMeshes(renderMeshesList, vertexScale, meshRotation, _esm, isTree: true);
                     if (combinedMesh != null)
                     {
@@ -967,9 +983,15 @@ namespace ESMSharp.NIF
                             {
                                 MeshCollider meshCollider = rootObj.AddComponent<MeshCollider>();
                                 meshCollider.sharedMesh = collisionMesh;
-                                meshCollider.convex = false; // Trees typically use non-convex colliders
-                                //UnityEngine.Debug.Log($"Added MeshCollider to tree {filename} using {collisionMeshesList.Count} collision mesh(es)");
+                                meshCollider.convex = false; // Trees/grass typically use non-convex colliders
+                                // Note: For grass, isTrigger will be set in PlaceGrassDetail
+                                //UnityEngine.Debug.Log($"Added MeshCollider to combined mesh {filename} using {collisionMeshesList.Count} collision mesh(es)");
                             }
+                        }
+                        else
+                        {
+                            // If no collision mesh exists, create one from the render mesh for grass (trees might not need it)
+                            // This will be handled in PlaceGrassDetail if needed
                         }
                         
                         //UnityEngine.Debug.Log($"Created combined NIF model (niflib.net): {filename} with {renderMeshesList.Count} render mesh(es) combined into {combinedMesh.subMeshCount} submesh(es) on root, {collisionMeshesList.Count} collision mesh(es) for collider");

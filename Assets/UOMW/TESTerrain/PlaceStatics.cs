@@ -18,7 +18,7 @@ namespace ESMSharp.TES3Terrain
         private string _esm = "";
         private string _bsa = "";
         private NIFLoader _nifLoader;
-        private Dictionary<string, GameObject> _loadedModels = new Dictionary<string, GameObject>(StringComparer.OrdinalIgnoreCase);
+        // Model cache removed - now using global TESNifLibrary
         private Dictionary<string, TreePrototype> _treePrototypes = new Dictionary<string, TreePrototype>(StringComparer.OrdinalIgnoreCase);
         private List<TreeInstance> _treeInstances = new List<TreeInstance>();
         private BSA _bsaArchive = null;
@@ -217,9 +217,7 @@ namespace ESMSharp.TES3Terrain
                         // VHGT offset is in Morrowind units, needs to be scaled
                         // Height scale factor is 8.0f (from terrain generation)
                         // Then convert to Unity units using MORROWIND_TO_TERRAIN_SCALE
-                        const float HEIGHT_SCALE_FACTOR = 8.0f;
-                        const float MORROWIND_TO_TERRAIN_SCALE = 64f / 8192f; // 0.0078125
-                        return vhgt.offset * HEIGHT_SCALE_FACTOR * MORROWIND_TO_TERRAIN_SCALE;
+                        return vhgt.offset * TESGlobals.HEIGHT_MAP_SCALE_FACTOR * TESGlobals.MORROWIND_TO_TERRAIN_SCALE;
                     }
                 }
             }
@@ -311,6 +309,8 @@ namespace ESMSharp.TES3Terrain
 
             int placedTreesCount = 0;
             int failedTreesCount = 0;
+            int placedGrassCount = 0;
+            int failedGrassCount = 0;
             int placedStructuresCount = 0;
             int failedStructuresCount = 0;
 
@@ -330,6 +330,9 @@ namespace ESMSharp.TES3Terrain
                     {
                         // Place trees
                         PlaceReference(currentObjectID, currentREFP, currentScale, statRecordsByName, cellParent, cellGridX, cellGridY, ObjectType.Trees, terrain, parent, ref placedTreesCount, ref failedTreesCount, allRecords);
+                        
+                        // Place grass
+                        PlaceReference(currentObjectID, currentREFP, currentScale, statRecordsByName, cellParent, cellGridX, cellGridY, ObjectType.Grass, terrain, parent, ref placedGrassCount, ref failedGrassCount, allRecords);
                         
                         // Place large structures
                         PlaceReference(currentObjectID, currentREFP, currentScale, statRecordsByName, cellParent, cellGridX, cellGridY, ObjectType.LargeStructures, terrain, parent, ref placedStructuresCount, ref failedStructuresCount, allRecords);
@@ -364,11 +367,14 @@ namespace ESMSharp.TES3Terrain
                 // Place trees
                 PlaceReference(currentObjectID, currentREFP, currentScale, statRecordsByName, cellParent, cellGridX, cellGridY, ObjectType.Trees, terrain, parent, ref placedTreesCount, ref failedTreesCount, allRecords);
                 
+                // Place grass
+                PlaceReference(currentObjectID, currentREFP, currentScale, statRecordsByName, cellParent, cellGridX, cellGridY, ObjectType.Grass, terrain, parent, ref placedGrassCount, ref failedGrassCount, allRecords);
+                
                 // Place large structures
                 PlaceReference(currentObjectID, currentREFP, currentScale, statRecordsByName, cellParent, cellGridX, cellGridY, ObjectType.LargeStructures, terrain, parent, ref placedStructuresCount, ref failedStructuresCount, allRecords);
             }
 
-            //UnityEngine.Debug.Log($"TESCell ({cellGridX}, {cellGridY}): Placed {placedTreesCount} trees ({failedTreesCount} failed), {placedStructuresCount} structures ({failedStructuresCount} failed)");
+            //UnityEngine.Debug.Log($"TESCell ({cellGridX}, {cellGridY}): Placed {placedTreesCount} trees ({failedTreesCount} failed), {placedGrassCount} grass ({failedGrassCount} failed), {placedStructuresCount} structures ({failedStructuresCount} failed)");
             
             // Apply tree instances to terrain if any were placed
             if (terrain != null && terrain.terrainData != null && _treeInstances.Count > 0)
@@ -617,29 +623,32 @@ namespace ESMSharp.TES3Terrain
         {
             try
             {
+                // Use global constants from TESGlobals
+                
                 // Strip any subdirectory paths from filename (use just the base filename)
                 string baseFilename = Path.GetFileName(modelFilename);
+                string baseFilenameNoExt = Path.GetFileNameWithoutExtension(baseFilename);
                 
-                // Check if we've already loaded this model (mesh instancing)
-                GameObject templateModel = null;
-                if (_loadedModels.TryGetValue(baseFilename, out templateModel))
+                // Check if we've already loaded this model (mesh instancing) - use global library
+                TESNifLibrary.NifEntry cachedEntry = TESNifLibrary.GetModelByBaseFilename(baseFilenameNoExt);
+                if (cachedEntry != null)
                 {
                     // Instantiate the existing model instead of loading again
-                    GameObject instanceObj = GameObject.Instantiate(templateModel);
-                    instanceObj.name = templateModel.name; // Unity adds "(Clone)" automatically
+                    GameObject instanceObj = GameObject.Instantiate(cachedEntry.Model);
+                    instanceObj.name = cachedEntry.Model.name; // Unity adds "(Clone)" automatically
                     
                     // Use the same coordinate conversion as PlaceStaticObject
-                    const float TREE_MORROWIND_TO_TERRAIN_SCALE = 64f / 8192f; // 0.0078125
+                    // Use 64/8192 for scaling so statics snap together correctly, then add offset to align with terrain
                     
                     // REFP coordinates in Morrowind are stored as (X, Z, Y) not (X, Y, Z)
-                    float instanceScaledX = refp.x * TREE_MORROWIND_TO_TERRAIN_SCALE;
-                    float instanceScaledZ = refp.y * TREE_MORROWIND_TO_TERRAIN_SCALE; // Use refp.y for Z (North coordinate)
-                    float instanceScaledY = refp.z * TREE_MORROWIND_TO_TERRAIN_SCALE; // Use refp.z for Y (Height coordinate)
+                    float instanceScaledX = refp.x * TESGlobals.MORROWIND_TO_STATIC_SCALE;
+                    float instanceScaledZ = refp.y * TESGlobals.MORROWIND_TO_STATIC_SCALE; // Use refp.y for Z (North coordinate)
+                    float instanceScaledY = refp.z * TESGlobals.MORROWIND_TO_STATIC_SCALE; // Use refp.z for Y (Height coordinate)
                     
                     Vector3 instancePosition = new Vector3(
                         instanceScaledX,      // X position in world space
                         instanceScaledY,      // Y position (height) from REFP coordinates
-                        instanceScaledZ       // Z position in world space (no negation)
+                        instanceScaledZ       // Z position in world space
                     );
                     
                     // Convert Morrowind rotation to Unity rotation (same as statics)
@@ -654,7 +663,7 @@ namespace ESMSharp.TES3Terrain
                     instanceObj.transform.rotation = instanceRotation;
                     
                     // XSCL scale multiplies the base GameObject scale (same as statics)
-                    Vector3 instanceBaseScale = new Vector3(TREE_MORROWIND_TO_TERRAIN_SCALE, TREE_MORROWIND_TO_TERRAIN_SCALE, TREE_MORROWIND_TO_TERRAIN_SCALE);
+                    Vector3 instanceBaseScale = new Vector3(TESGlobals.MORROWIND_TO_STATIC_SCALE, TESGlobals.MORROWIND_TO_STATIC_SCALE, TESGlobals.MORROWIND_TO_STATIC_SCALE);
                     // Apply XSCL scale (handle negative scales like statics)
                     if (scale < 0)
                     {
@@ -703,21 +712,22 @@ namespace ESMSharp.TES3Terrain
                     return false;
                 }
                 
-                // Store the loaded model for future instancing (keep it active for instancing)
-                _loadedModels[baseFilename] = treeModel;
+                // Store the loaded model in global library for future instancing
+                string staticId = objectId?.objectId?.TrimEnd('\0');
+                string staticName = staticId; // Use ID as name if no separate name available
+                TESNifLibrary.AddModel(staticId, staticName, baseFilename, baseFilenameNoExt, treeModel, combineMeshes: true);
                 
                 // Use the same coordinate conversion as PlaceStaticObject
-                const float MORROWIND_TO_TERRAIN_SCALE = 64f / 8192f; // 0.0078125
                 
                 // REFP coordinates in Morrowind are stored as (X, Z, Y) not (X, Y, Z)
-                float scaledX = refp.x * MORROWIND_TO_TERRAIN_SCALE;
-                float scaledZ = refp.y * MORROWIND_TO_TERRAIN_SCALE; // Use refp.y for Z (North coordinate)
-                float scaledY = refp.z * MORROWIND_TO_TERRAIN_SCALE; // Use refp.z for Y (Height coordinate)
+                float scaledX = refp.x * TESGlobals.MORROWIND_TO_STATIC_SCALE;
+                float scaledZ = refp.y * TESGlobals.MORROWIND_TO_STATIC_SCALE; // Use refp.y for Z (North coordinate)
+                float scaledY = refp.z * TESGlobals.MORROWIND_TO_STATIC_SCALE; // Use refp.z for Y (Height coordinate)
                 
                 Vector3 unityPosition = new Vector3(
                     scaledX,      // X position in world space
                     scaledY,      // Y position (height) from REFP coordinates
-                    scaledZ       // Z position in world space (no negation)
+                    scaledZ       // Z position in world space
                 );
                 
                 // Convert Morrowind rotation to Unity rotation (same as statics)
@@ -847,12 +857,212 @@ namespace ESMSharp.TES3Terrain
         /// <summary>
         /// Places grass as a Unity terrain detail
         /// </summary>
-        private bool PlaceGrassDetail(string modelFilename, SubRecordCellREFP refp, float scale, SubRecordCellObjectID objectId, Terrain terrain, int cellGridX, int cellGridY)
+        private bool PlaceGrassDetail(string modelFilename, SubRecordCellREFP refp, float scale, SubRecordCellObjectID objectId, Terrain terrain, int cellGridX, int cellGridY, Transform parent = null)
         {
-            // TODO: Implement Unity terrain detail placement
-            // For now, just log that we found grass
-            UnityEngine.Debug.Log($"Grass found: {modelFilename} at cell ({cellGridX}, {cellGridY}), position ({refp.x}, {refp.z}, {-refp.y})");
-            return false; // Not implemented yet
+            try
+            {
+                // Use global constants from TESGlobals
+                
+                // Strip any subdirectory paths from filename (use just the base filename)
+                string baseFilename = Path.GetFileName(modelFilename);
+                string baseFilenameNoExt = Path.GetFileNameWithoutExtension(baseFilename);
+                
+                // Check if we've already loaded this model (mesh instancing) - use global library
+                TESNifLibrary.NifEntry cachedEntry = TESNifLibrary.GetModelByBaseFilename(baseFilenameNoExt);
+                if (cachedEntry != null)
+                {
+                    // Instantiate the existing model instead of loading again
+                    GameObject instanceObj = GameObject.Instantiate(cachedEntry.Model);
+                    instanceObj.name = cachedEntry.Model.name; // Unity adds "(Clone)" automatically
+                    
+                    // Use the same coordinate conversion as PlaceStaticObject and PlaceTree
+                    // Use 64/8192 for scaling so statics snap together correctly, then add offset to align with terrain
+                    
+                    // REFP coordinates in Morrowind are stored as (X, Z, Y) not (X, Y, Z)
+                    float instanceScaledX = refp.x * TESGlobals.MORROWIND_TO_STATIC_SCALE;
+                    float instanceScaledZ = refp.y * TESGlobals.MORROWIND_TO_STATIC_SCALE; // Use refp.y for Z (North coordinate)
+                    float instanceScaledY = refp.z * TESGlobals.MORROWIND_TO_STATIC_SCALE; // Use refp.z for Y (Height coordinate)
+                    
+                    Vector3 instancePosition = new Vector3(
+                        instanceScaledX,      // X position in world space
+                        instanceScaledY,      // Y position (height) from REFP coordinates
+                        instanceScaledZ       // Z position in world space
+                    );
+                    
+                    // Convert Morrowind rotation to Unity rotation (same as statics)
+                    Quaternion instanceRotation = Quaternion.Euler(
+                        -refp.yaw * Mathf.Rad2Deg,    // Yaw -> X
+                        -refp.pitch * Mathf.Rad2Deg,  // Pitch -> Y
+                        -refp.roll * Mathf.Rad2Deg    // Roll -> Z
+                    );
+                    
+                    // Set position, rotation, scale BEFORE parenting
+                    instanceObj.transform.position = instancePosition;
+                    instanceObj.transform.rotation = instanceRotation;
+                    
+                    // XSCL scale multiplies the base GameObject scale (same as statics)
+                    Vector3 instanceBaseScale = new Vector3(TESGlobals.MORROWIND_TO_STATIC_SCALE, TESGlobals.MORROWIND_TO_STATIC_SCALE, TESGlobals.MORROWIND_TO_STATIC_SCALE);
+                    // Apply XSCL scale (handle negative scales like statics)
+                    if (scale < 0)
+                    {
+                        // Negative scale = mirror object (use absolute value)
+                        instanceObj.transform.localScale = instanceBaseScale * Mathf.Abs(scale);
+                    }
+                    else
+                    {
+                        // Positive scale = normal scaling
+                        instanceObj.transform.localScale = instanceBaseScale * scale;
+                    }
+                    
+                    // Set name
+                    if (objectId != null && !string.IsNullOrEmpty(objectId.objectId))
+                    {
+                        instanceObj.name = objectId.objectId.TrimEnd('\0');
+                    }
+                    
+                    // Apply reflection fix: negate Z scale and negate Yaw (same as statics)
+                    Vector3 instanceCurrentScale = instanceObj.transform.localScale;
+                    instanceObj.transform.localScale = new Vector3(instanceCurrentScale.x, instanceCurrentScale.y, -instanceCurrentScale.z);
+                    
+                    // Negate Yaw (Y rotation)
+                    Vector3 instanceEuler = instanceObj.transform.rotation.eulerAngles;
+                    float instanceYaw = instanceEuler.y;
+                    if (instanceYaw > 180f) instanceYaw -= 360f;
+                    instanceObj.transform.rotation = Quaternion.Euler(instanceEuler.x, -instanceYaw, instanceEuler.z);
+                    
+                    // Ensure MeshCollider is a trigger (for interaction, doesn't block movement)
+                    MeshCollider instanceMeshCollider = instanceObj.GetComponent<MeshCollider>();
+                    if (instanceMeshCollider != null)
+                    {
+                        instanceMeshCollider.isTrigger = true;
+                    }
+                    else
+                    {
+                        // If no collider exists, add one as trigger
+                        MeshFilter meshFilter = instanceObj.GetComponent<MeshFilter>();
+                        if (meshFilter != null && meshFilter.sharedMesh != null)
+                        {
+                            instanceMeshCollider = instanceObj.AddComponent<MeshCollider>();
+                            instanceMeshCollider.sharedMesh = meshFilter.sharedMesh;
+                            instanceMeshCollider.convex = false;
+                            instanceMeshCollider.isTrigger = true;
+                        }
+                    }
+                    
+                    // Add LOD component
+                    AddLODToObject(instanceObj);
+                    
+                    // Parent to cell or specified parent (same as statics)
+                    if (parent != null)
+                    {
+                        instanceObj.transform.SetParent(parent, worldPositionStays: true);
+                    }
+                    
+                    return true;
+                }
+                
+                // Load the NIF model with meshes combined (for grass, same as trees)
+                GameObject grassModel = _nifLoader.LoadNIFFromCache(baseFilename, combineMeshes: true);
+                if (grassModel == null)
+                {
+                    //UnityEngine.Debug.LogWarning($"Failed to load grass model: {baseFilename}");
+                    return false;
+                }
+                
+                // Store the loaded model in global library for future instancing
+                string staticId = objectId?.objectId?.TrimEnd('\0');
+                string staticName = staticId; // Use ID as name if no separate name available
+                TESNifLibrary.AddModel(staticId, staticName, baseFilename, baseFilenameNoExt, grassModel, combineMeshes: true);
+                
+                // Use the same coordinate conversion as PlaceStaticObject and PlaceTree
+                
+                // REFP coordinates in Morrowind are stored as (X, Z, Y) not (X, Y, Z)
+                float scaledX = refp.x * TESGlobals.MORROWIND_TO_STATIC_SCALE;
+                float scaledZ = refp.y * TESGlobals.MORROWIND_TO_STATIC_SCALE; // Use refp.y for Z (North coordinate)
+                float scaledY = refp.z * TESGlobals.MORROWIND_TO_STATIC_SCALE; // Use refp.z for Y (Height coordinate)
+                
+                Vector3 unityPosition = new Vector3(
+                    scaledX,      // X position in world space
+                    scaledY,      // Y position (height) from REFP coordinates
+                    scaledZ       // Z position in world space
+                );
+                
+                // Convert Morrowind rotation to Unity rotation (same as statics)
+                Quaternion unityRotation = Quaternion.Euler(
+                    -refp.yaw * Mathf.Rad2Deg,    // Yaw -> X
+                    -refp.pitch * Mathf.Rad2Deg,  // Pitch -> Y
+                    -refp.roll * Mathf.Rad2Deg    // Roll -> Z
+                );
+                
+                // Set position and rotation BEFORE parenting
+                grassModel.transform.position = unityPosition;
+                grassModel.transform.rotation = unityRotation;
+                
+                // XSCL scale multiplies the base GameObject scale (same as statics)
+                Vector3 modelBaseScale = grassModel.transform.localScale;
+                // Apply XSCL scale (handle negative scales like statics)
+                if (scale < 0)
+                {
+                    // Negative scale = mirror object (use absolute value)
+                    grassModel.transform.localScale = modelBaseScale * Mathf.Abs(scale);
+                }
+                else
+                {
+                    // Positive scale = normal scaling
+                    grassModel.transform.localScale = modelBaseScale * scale;
+                }
+                
+                // Set name
+                if (objectId != null && !string.IsNullOrEmpty(objectId.objectId))
+                {
+                    grassModel.name = objectId.objectId.TrimEnd('\0');
+                }
+                
+                // Apply reflection fix: negate Z scale and negate Yaw (same as statics)
+                Vector3 currentScale = grassModel.transform.localScale;
+                grassModel.transform.localScale = new Vector3(currentScale.x, currentScale.y, -currentScale.z);
+                
+                // Negate Yaw (Y rotation)
+                Vector3 euler = grassModel.transform.rotation.eulerAngles;
+                float yaw = euler.y;
+                if (yaw > 180f) yaw -= 360f;
+                grassModel.transform.rotation = Quaternion.Euler(euler.x, -yaw, euler.z);
+                
+                // Ensure MeshCollider is a trigger (for interaction, doesn't block movement)
+                MeshCollider meshCollider = grassModel.GetComponent<MeshCollider>();
+                if (meshCollider != null)
+                {
+                    meshCollider.isTrigger = true;
+                }
+                else
+                {
+                    // If no collider exists, add one as trigger
+                    MeshFilter meshFilter = grassModel.GetComponent<MeshFilter>();
+                    if (meshFilter != null && meshFilter.sharedMesh != null)
+                    {
+                        meshCollider = grassModel.AddComponent<MeshCollider>();
+                        meshCollider.sharedMesh = meshFilter.sharedMesh;
+                        meshCollider.convex = false;
+                        meshCollider.isTrigger = true;
+                    }
+                }
+                
+                // Add LOD component
+                AddLODToObject(grassModel);
+                
+                // Parent to cell or specified parent (same as statics)
+                if (parent != null)
+                {
+                    grassModel.transform.SetParent(parent, worldPositionStays: true);
+                }
+                
+                return true;
+            }
+            catch (Exception ex)
+            {
+                UnityEngine.Debug.LogError($"Error placing grass {modelFilename}: {ex.Message}\n{ex.StackTrace}");
+                return false;
+            }
         }
 
         /// <summary>
@@ -984,9 +1194,11 @@ namespace ESMSharp.TES3Terrain
                 Transform refParent = cellParent != null ? cellParent.transform : parent;
                 success = PlaceTree(modelFilename, refp, scale, objectId, terrain, cellGridX, cellGridY, refParent);
             }
-            else if (objectType == ObjectType.Grass && terrain != null)
+            else if (objectType == ObjectType.Grass)
             {
-                success = PlaceGrassDetail(modelFilename, refp, scale, objectId, terrain, cellGridX, cellGridY);
+                // Place grass as static meshes (same as trees, but with trigger colliders for interaction)
+                Transform refParent = cellParent != null ? cellParent.transform : parent;
+                success = PlaceGrassDetail(modelFilename, refp, scale, objectId, terrain, cellGridX, cellGridY, refParent);
             }
             else if (objectType == ObjectType.LargeStructures)
             {
@@ -1077,10 +1289,12 @@ namespace ESMSharp.TES3Terrain
                 string baseFilename = Path.GetFileName(modelFilename);
                 GameObject model = null;
 
-                // Check if already loaded
-                if (_loadedModels.TryGetValue(baseFilename, out model))
+                // Check if already loaded in global library
+                string baseFilenameNoExt = Path.GetFileNameWithoutExtension(baseFilename);
+                TESNifLibrary.NifEntry cachedEntry = TESNifLibrary.GetModelByBaseFilename(baseFilenameNoExt);
+                if (cachedEntry != null)
                 {
-                    return GetBoundingSphereRadiusFromGameObject(model, scale);
+                    return GetBoundingSphereRadiusFromGameObject(cachedEntry.Model, scale);
                 }
 
                 // Try to load the model temporarily
@@ -1089,7 +1303,7 @@ namespace ESMSharp.TES3Terrain
                 {
                     float radius = GetBoundingSphereRadiusFromGameObject(tempModel, scale);
                     // Don't store it if it wasn't already stored (to avoid polluting cache)
-                    if (!_loadedModels.ContainsKey(baseFilename))
+                    if (!TESNifLibrary.HasModel(baseFilenameNoExt))
                     {
                         UnityEngine.Object.DestroyImmediate(tempModel);
                     }
@@ -1355,32 +1569,29 @@ namespace ESMSharp.TES3Terrain
                 }
                 
                 // Convert Morrowind world coordinates to Unity world coordinates
-                // Morrowind uses 8192 units per cell, Unity terrain uses 64 units per cell
-                // Same conversion as trees: scale by 64/8192 = 1/128
-                const float MORROWIND_TO_TERRAIN_SCALE = 64f / 8192f; // 0.0078125
+                // Morrowind uses 8192 units per cell for static placement (64 effective units)
+                // Unity terrain uses 65 units per cell (for RAW +1 requirement)
+                // Use 64/8192 for scaling so statics snap together correctly
+                // Use global constant from TESGlobals
                 
                 // REFP coordinates in Morrowind are stored as (X, Z, Y) not (X, Y, Z)
                 // refp.x = Morrowind X (East) - world coordinate
                 // refp.y = Morrowind Z (North) - world coordinate
                 // refp.z = Morrowind Y (Up/Height) - world coordinate
-                // Scale to match terrain coordinate system (64 units per cell instead of 8192)
                 //
                 // Important: Static objects in Morrowind use absolute coordinates relative to the cell's origin,
                 // not dynamically calculated from terrain height. The Z coordinate (Y in Unity) is an absolute
                 // value that determines the object's height relative to the cell's reference point.
                 // VHGT is used for terrain generation, but static objects are placed independently at fixed coordinates.
-                float scaledX = refp.x * MORROWIND_TO_TERRAIN_SCALE;
-                float scaledZ = refp.y * MORROWIND_TO_TERRAIN_SCALE; // Use refp.y for Z (North coordinate)
-                float scaledY = refp.z * MORROWIND_TO_TERRAIN_SCALE; // Use refp.z for Y (Height coordinate) - absolute, not terrain-relative
+                float scaledX = refp.x * TESGlobals.MORROWIND_TO_STATIC_SCALE;
+                float scaledZ = refp.y * TESGlobals.MORROWIND_TO_STATIC_SCALE; // Use refp.y for Z (North coordinate)
+                float scaledY = refp.z * TESGlobals.MORROWIND_TO_STATIC_SCALE; // Use refp.z for Y (Height coordinate) - absolute, not terrain-relative
                 
                 // REFP coordinates are already in world space, so we use the scaled values directly
-                // No need to add terrain offset - the scaled coordinates are already correct world positions
-                // Don't negate Z - the user confirmed the normal value is correct
-                // Use the actual scaled Y coordinate from REFP directly (absolute position, not terrain-relative)
                 Vector3 unityPosition = new Vector3(
                     scaledX,      // X position in world space
                     scaledY,      // Y position (height) from REFP coordinates - absolute position relative to cell origin
-                    scaledZ       // Z position in world space (no negation)
+                    scaledZ       // Z position in world space
                 );
                 
                 // Convert Morrowind rotation to Unity rotation
@@ -1398,24 +1609,25 @@ namespace ESMSharp.TES3Terrain
                     -refp.roll * Mathf.Rad2Deg    // Roll -> Z (negated to match OpenMW's -Z axis)
                 );
                 
-                // Check if we've already loaded this model (mesh instancing)
-                GameObject templateModel = null;
-                if (_loadedModels.TryGetValue(baseFilename, out templateModel))
+                // Check if we've already loaded this model (mesh instancing) - use global library
+                string baseFilenameNoExt = Path.GetFileNameWithoutExtension(baseFilename);
+                TESNifLibrary.NifEntry cachedEntry = TESNifLibrary.GetModelByBaseFilename(baseFilenameNoExt);
+                if (cachedEntry != null)
                 {
                     // Instantiate the existing model instead of loading again
-                    GameObject instanceObj = GameObject.Instantiate(templateModel);
-                    instanceObj.name = templateModel.name; // Unity adds "(Clone)" automatically
+                    GameObject instanceObj = GameObject.Instantiate(cachedEntry.Model);
+                    instanceObj.name = cachedEntry.Model.name; // Unity adds "(Clone)" automatically
                     
                     // Set position, rotation, scale BEFORE parenting
                     instanceObj.transform.position = unityPosition;
                     instanceObj.transform.rotation = unityRotation;
                     
-                    // XSCL scale multiplies the base GameObject scale (MORROWIND_TO_TERRAIN_SCALE = 0.0078125), not replaces it
+                    // XSCL scale multiplies the base GameObject scale (MORROWIND_TO_STATIC_SCALE = 0.0078125), not replaces it
                     // Base scale is already applied in NIFLoader, so we multiply by XSCL here
                     // IMPORTANT: The template may have the reflection fix already applied (Z scale negated)
                     // We need to use the ORIGINAL base scale, not read it from the instance
-                    // Use the existing MORROWIND_TO_TERRAIN_SCALE constant from the enclosing scope
-                    Vector3 instanceBaseScale = new Vector3(MORROWIND_TO_TERRAIN_SCALE, MORROWIND_TO_TERRAIN_SCALE, MORROWIND_TO_TERRAIN_SCALE);
+                    // Use the existing MORROWIND_TO_STATIC_SCALE constant from the enclosing scope
+                    Vector3 instanceBaseScale = new Vector3(TESGlobals.MORROWIND_TO_STATIC_SCALE, TESGlobals.MORROWIND_TO_STATIC_SCALE, TESGlobals.MORROWIND_TO_STATIC_SCALE);
                     
                     // Apply XSCL scale
                     if (scale < 0)
@@ -1469,11 +1681,13 @@ namespace ESMSharp.TES3Terrain
                     return false;
                 }
 
-                // Store the loaded model for future instancing
+                // Store the loaded model in global library for future instancing
                 // IMPORTANT: Store the model BEFORE applying any instance-specific transforms
                 // The template should remain in its base state (no position, rotation, scale, or reflection fix)
                 // Each instance (including this first one) will get its own transforms applied
-                _loadedModels[baseFilename] = modelObj;
+                string staticId = objectId?.objectId?.TrimEnd('\0');
+                string staticName = staticId; // Use ID as name if no separate name available
+                TESNifLibrary.AddModel(staticId, staticName, modelFilename, baseFilenameNoExt, modelObj, combineMeshes: false);
 
                 // Set position and rotation BEFORE parenting
                 modelObj.transform.position = unityPosition;
