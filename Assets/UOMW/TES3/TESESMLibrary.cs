@@ -208,6 +208,12 @@ namespace ESMSharp.TES3
                                 mRecord = globrecord;
                                 break;
 
+                            case "SCPT":
+                                RecordScpt scptrecord = new RecordScpt();
+                                scptrecord.Deserialize(reader, name);
+                                mRecord = scptrecord;
+                                break;
+
                             default:
                                 mRecord = new Record();
                                 mRecord.Deserialize(reader, name);
