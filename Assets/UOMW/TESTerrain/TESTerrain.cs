@@ -73,7 +73,7 @@ namespace ESMSharp.TES3Terrain
         }
         #endif
 
-        private bool ConvertDDSToPNG(byte[] ddsData, string outputPngPath)
+        public bool ConvertDDSToPNG(byte[] ddsData, string outputPngPath)
         {
             try
             {
@@ -1286,6 +1286,8 @@ namespace ESMSharp.TES3Terrain
             List<TerrainLayer> terrainLayers = new List<TerrainLayer>();
             Dictionary<ushort, int> textureIndexToLayerIndex = new Dictionary<ushort, int>();
 
+            UnityEngine.Debug.Log($"GenerateUnityTerrain: Found {uniqueTextureIndices.Count} unique VTEX indices, {textureIndexToNames.Count} LTEX texture mappings");
+
             // Sort texture indices to ensure consistent ordering
             List<ushort> sortedIndices = uniqueTextureIndices.OrderBy(x => x).ToList();
 
@@ -1300,6 +1302,19 @@ namespace ESMSharp.TES3Terrain
 
                 if (textureIndexToNames.TryGetValue(ltexIndex, out var names))
                 {
+                    // Check texture library FIRST by VTEX index - textures might already be loaded from GatherLandTextures
+                    Texture2D texture = null;
+                    string texturePath = null;
+                    string foundBaseName = null;
+                    TESLTextureLibrary.TextureEntry cachedEntry = TESLTextureLibrary.GetTextureByVTEXIndex(vtexIndex);
+                    if (cachedEntry != null)
+                    {
+                        texture = cachedEntry.Texture;
+                        texturePath = cachedEntry.Filename;
+                        foundBaseName = System.IO.Path.GetFileName(texturePath);
+                        UnityEngine.Debug.Log($"Reusing cached texture from library (by VTEX {vtexIndex}): {cachedEntry.Filename}");
+                    }
+                    
                     string textureDir = System.IO.Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Textures", _esm);
                     
                     // Try both NAME and DATA values, and also try with common Morrowind texture prefixes
@@ -1307,26 +1322,48 @@ namespace ESMSharp.TES3Terrain
                     if (!string.IsNullOrEmpty(names.primary))
                     {
                         namesToTry.Add(names.primary);
-                        // Try with common prefixes
-                        namesToTry.Add("Tx_" + names.primary);
-                        namesToTry.Add("tx_" + names.primary.ToLower());
+                        // Try with common prefixes (only if not already present)
+                        if (!names.primary.StartsWith("Tx_", StringComparison.OrdinalIgnoreCase) && 
+                            !names.primary.StartsWith("tx_", StringComparison.OrdinalIgnoreCase))
+                        {
+                            namesToTry.Add("Tx_" + names.primary);
+                            namesToTry.Add("tx_" + names.primary.ToLower());
+                        }
+                        // Try removing spaces (common in Morrowind texture names)
+                        string primaryNoSpaces = names.primary.Replace(" ", "");
+                        if (primaryNoSpaces != names.primary)
+                        {
+                            namesToTry.Add(primaryNoSpaces);
+                            if (!primaryNoSpaces.StartsWith("Tx_", StringComparison.OrdinalIgnoreCase) && 
+                                !primaryNoSpaces.StartsWith("tx_", StringComparison.OrdinalIgnoreCase))
+                            {
+                                namesToTry.Add("Tx_" + primaryNoSpaces);
+                                namesToTry.Add("tx_" + primaryNoSpaces.ToLower());
+                            }
+                        }
                     }
                     if (!string.IsNullOrEmpty(names.fallback))
                     {
                         namesToTry.Add(names.fallback);
                         string fallbackBase = System.IO.Path.GetFileNameWithoutExtension(names.fallback);
                         namesToTry.Add(fallbackBase);
+                        // Also try with Tx_ prefix if not already there
+                        if (!fallbackBase.StartsWith("Tx_", StringComparison.OrdinalIgnoreCase) && 
+                            !fallbackBase.StartsWith("tx_", StringComparison.OrdinalIgnoreCase))
+                        {
+                            namesToTry.Add("Tx_" + fallbackBase);
+                            namesToTry.Add("tx_" + fallbackBase.ToLower());
+                        }
                     }
                     // Remove duplicates
                     namesToTry = namesToTry.Distinct().ToList();
                     
-                    // Try to find the texture file (case-insensitive)
-                    string texturePath = null;
-                    string foundBaseName = null;
-                    
-                    if (Directory.Exists(textureDir))
+                    // Try to find the texture file (case-insensitive) - MATCHING ORIGINAL WORKING CODE
+                    // Only search if not already found in library
+                    if (texture == null && Directory.Exists(textureDir))
                     {
                         string[] files = Directory.GetFiles(textureDir);
+                        UnityEngine.Debug.Log($"[VTEX {vtexIndex}] Searching in directory with {files.Length} files");
                         
                         // For each name to try, search with multiple extensions
                         foreach (string nameToTry in namesToTry)
@@ -1344,13 +1381,17 @@ namespace ESMSharp.TES3Terrain
                             foreach (string ext in extensions)
                             {
                                 string searchFilename = baseNameNoExt + ext;
+                                UnityEngine.Debug.Log($"[VTEX {vtexIndex}] Searching for: {searchFilename}");
+                                
                                 foreach (string file in files)
                                 {
                                     string fileName = System.IO.Path.GetFileName(file);
+                                    // Case-insensitive comparison
                                     if (fileName.Equals(searchFilename, StringComparison.OrdinalIgnoreCase))
                                     {
                                         texturePath = file;
                                         foundBaseName = fileName;
+                                        UnityEngine.Debug.Log($"[VTEX {vtexIndex}] ✓ Found: {fileName}");
                                         break;
                                     }
                                 }
@@ -1358,22 +1399,59 @@ namespace ESMSharp.TES3Terrain
                             }
                             if (texturePath != null) break;
                         }
-                    }
-                    
-                    Texture2D texture = null;
-                    bool usePlaceholder = false;
-                    
-                    // Check global texture library first
-                    if (texturePath != null)
-                    {
-                        TESLTextureLibrary.TextureEntry cachedEntry = TESLTextureLibrary.GetTextureByPath(texturePath);
-                        if (cachedEntry != null)
+                        
+                        // If still not found, try a more aggressive search - check if any file contains the base name
+                        if (texturePath == null && namesToTry.Count > 0)
                         {
-                            texture = cachedEntry.Texture;
-                            UnityEngine.Debug.Log($"Reusing cached texture from library: {System.IO.Path.GetFileName(texturePath)}");
+                            string firstBaseName = System.IO.Path.GetFileNameWithoutExtension(namesToTry[0]);
+                            UnityEngine.Debug.Log($"[VTEX {vtexIndex}] Exact match failed, trying fuzzy search for: {firstBaseName}");
+                            
+                            foreach (string file in files)
+                            {
+                                string fileName = System.IO.Path.GetFileName(file);
+                                string fileNameNoExt = System.IO.Path.GetFileNameWithoutExtension(fileName);
+                                
+                                // Try removing underscores and spaces for comparison
+                                string normalizedSearch = firstBaseName.Replace("_", "").Replace(" ", "").Replace("-", "").ToLower();
+                                string normalizedFile = fileNameNoExt.Replace("_", "").Replace(" ", "").Replace("-", "").ToLower();
+                                
+                                if (normalizedFile.Contains(normalizedSearch) || normalizedSearch.Contains(normalizedFile))
+                                {
+                                    // Check if it's a valid texture extension
+                                    string fileExt = System.IO.Path.GetExtension(fileName).ToLower();
+                                    if (fileExt == ".png" || fileExt == ".dds" || fileExt == ".tga")
+                                    {
+                                        texturePath = file;
+                                        foundBaseName = fileName;
+                                        UnityEngine.Debug.Log($"[VTEX {vtexIndex}] ✓ Found via fuzzy match: {fileName}");
+                                        break;
+                                    }
+                                }
+                            }
                         }
                     }
                     
+                    bool usePlaceholder = false;
+                    
+                    // Check global texture library by path if we found a file - MATCHING ORIGINAL WORKING CODE
+                    if (texture == null && texturePath != null)
+                    {
+                        cachedEntry = TESLTextureLibrary.GetTextureByPath(texturePath);
+                        if (cachedEntry != null)
+                        {
+                            texture = cachedEntry.Texture;
+                            if (texture != null)
+                            {
+                                UnityEngine.Debug.Log($"Reusing cached texture from library: {System.IO.Path.GetFileName(texturePath)}");
+                            }
+                            else
+                            {
+                                UnityEngine.Debug.LogWarning($"[VTEX {vtexIndex}] Library entry found but Texture is null for: {System.IO.Path.GetFileName(texturePath)}");
+                            }
+                        }
+                    }
+                    
+                    // Only try to load from file if texture is still null
                     if (texture == null && texturePath != null && File.Exists(texturePath))
                     {
                         try
@@ -1399,6 +1477,17 @@ namespace ESMSharp.TES3Terrain
                                         texturePath = pngPath; // Use PNG instead
                                         textureExtension = ".png";
                                         foundBaseName = System.IO.Path.GetFileName(pngPath);
+                                        
+                                        // Check library again with PNG path after conversion
+                                        if (texture == null)
+                                        {
+                                            TESLTextureLibrary.TextureEntry convertedEntry = TESLTextureLibrary.GetTextureByPath(pngPath);
+                                            if (convertedEntry != null)
+                                            {
+                                                texture = convertedEntry.Texture;
+                                                UnityEngine.Debug.Log($"Reusing cached texture from library (after DDS->PNG conversion): {System.IO.Path.GetFileName(pngPath)}");
+                                            }
+                                        }
                                     }
                                     else
                                     {
@@ -1412,6 +1501,17 @@ namespace ESMSharp.TES3Terrain
                                     texturePath = pngPath;
                                     textureExtension = ".png";
                                     foundBaseName = System.IO.Path.GetFileName(pngPath);
+                                    
+                                    // Check library again with PNG path
+                                    if (texture == null)
+                                    {
+                                        cachedEntry = TESLTextureLibrary.GetTextureByPath(pngPath);
+                                        if (cachedEntry != null)
+                                        {
+                                            texture = cachedEntry.Texture;
+                                            UnityEngine.Debug.Log($"Reusing cached texture from library (PNG path): {System.IO.Path.GetFileName(pngPath)}");
+                                        }
+                                    }
                                 }
                             }
                             
@@ -1437,6 +1537,18 @@ namespace ESMSharp.TES3Terrain
                                         texturePath = pngPath; // Use PNG instead
                                         textureExtension = ".png";
                                         foundBaseName = System.IO.Path.GetFileName(pngPath);
+                                        
+                                        // Check library again with PNG path after conversion
+                                        if (texture == null)
+                                        {
+                                            TESLTextureLibrary.TextureEntry convertedEntry = TESLTextureLibrary.GetTextureByPath(pngPath);
+                                            if (convertedEntry != null)
+                                            {
+                                                texture = convertedEntry.Texture;
+                                                UnityEngine.Debug.Log($"Reusing cached texture from library (after TGA->PNG conversion): {System.IO.Path.GetFileName(pngPath)}");
+                                            }
+                                        }
+                                        
                                         UnityEngine.Object.DestroyImmediate(tempTexture);
                                     }
                                     else
@@ -1452,6 +1564,17 @@ namespace ESMSharp.TES3Terrain
                                     texturePath = pngPath;
                                     textureExtension = ".png";
                                     foundBaseName = System.IO.Path.GetFileName(pngPath);
+                                    
+                                    // Check library again with PNG path
+                                    if (texture == null)
+                                    {
+                                        cachedEntry = TESLTextureLibrary.GetTextureByPath(pngPath);
+                                        if (cachedEntry != null)
+                                        {
+                                            texture = cachedEntry.Texture;
+                                            UnityEngine.Debug.Log($"Reusing cached texture from library (PNG path): {System.IO.Path.GetFileName(pngPath)}");
+                                        }
+                                    }
                                 }
                             }
                             
@@ -1547,10 +1670,16 @@ namespace ESMSharp.TES3Terrain
                             usePlaceholder = true;
                         }
                     }
-                    else
+                    else if (texture == null)
                     {
+                        // Only show "not found" warning if texture is actually null (not found in library and file doesn't exist)
                         string triedNames = string.Join(", ", namesToTry);
-                        UnityEngine.Debug.LogWarning($"Texture file not found for VTEX {vtexIndex} (LTEX {ltexIndex}) (tried: {triedNames}) (searched in: {textureDir}), using placeholder");
+                        string triedWithExts = string.Join(", ", namesToTry.SelectMany(n => 
+                        {
+                            string baseName = System.IO.Path.GetFileNameWithoutExtension(n);
+                            return new[] { ".png", ".dds", ".tga" }.Select(ext => baseName + ext);
+                        }).Distinct());
+                        UnityEngine.Debug.LogWarning($"[VTEX {vtexIndex}] Texture file not found for VTEX {vtexIndex} (LTEX {ltexIndex}) (tried: {triedNames}) (with extensions: {triedWithExts}) (searched in: {textureDir}), using placeholder");
                         usePlaceholder = true;
                     }
 
@@ -1578,6 +1707,7 @@ namespace ESMSharp.TES3Terrain
                 else
                 {
                     // No LTEX record found for this VTEX index, skip layer creation
+                    UnityEngine.Debug.LogWarning($"GenerateUnityTerrain: No LTEX record found for VTEX {vtexIndex} (LTEX {ltexIndex}), skipping layer creation");
                 }
             }
 
@@ -2451,7 +2581,11 @@ namespace ESMSharp.TES3Terrain
                 
                 if (textureIndexToNames.TryGetValue(ltexIndex, out var names))
                 {
-                    string textureDir = System.IO.Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Textures", _esm);
+                    UnityEngine.Debug.Log($"GenerateUnityTerrain: Processing VTEX {vtexIndex} (LTEX {ltexIndex}) - primary: '{names.primary ?? "null"}', fallback: '{names.fallback ?? "null"}'");
+                    // Build path and normalize immediately to ensure consistent separators
+                    string textureDir = System.IO.Path.GetFullPath(
+                        System.IO.Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Textures", _esm)
+                    );
                     
                     List<string> namesToTry = new List<string>();
                     if (!string.IsNullOrEmpty(names.primary))
@@ -2507,14 +2641,22 @@ namespace ESMSharp.TES3Terrain
                     Texture2D texture = null;
                     bool usePlaceholder = false;
                     
-                    // Check global texture library first
-                    if (texturePath != null)
+                    // Check global texture library first by VTEX index (most reliable)
+                    TESLTextureLibrary.TextureEntry cachedEntry = TESLTextureLibrary.GetTextureByVTEXIndex(vtexIndex);
+                    if (cachedEntry != null)
                     {
-                        TESLTextureLibrary.TextureEntry cachedEntry = TESLTextureLibrary.GetTextureByPath(texturePath);
+                        texture = cachedEntry.Texture;
+                        UnityEngine.Debug.Log($"Reusing cached texture from library (by VTEX {vtexIndex}): {cachedEntry.Filename}");
+                    }
+                    
+                    // Also check by path if we have one
+                    if (texture == null && texturePath != null)
+                    {
+                        cachedEntry = TESLTextureLibrary.GetTextureByPath(texturePath);
                         if (cachedEntry != null)
                         {
                             texture = cachedEntry.Texture;
-                            UnityEngine.Debug.Log($"Reusing cached texture from library: {System.IO.Path.GetFileName(texturePath)}");
+                            UnityEngine.Debug.Log($"Reusing cached texture from library (by path): {System.IO.Path.GetFileName(texturePath)}");
                         }
                     }
                     
@@ -2538,6 +2680,17 @@ namespace ESMSharp.TES3Terrain
                                         texturePath = pngPath;
                                         textureExtension = ".png";
                                         foundBaseName = System.IO.Path.GetFileName(pngPath);
+                                        
+                                        // Check library again with PNG path after conversion
+                                        if (texture == null)
+                                        {
+                                            TESLTextureLibrary.TextureEntry convertedEntry = TESLTextureLibrary.GetTextureByPath(pngPath);
+                                            if (convertedEntry != null)
+                                            {
+                                                texture = convertedEntry.Texture;
+                                                UnityEngine.Debug.Log($"Reusing cached texture from library (after DDS->PNG conversion): {System.IO.Path.GetFileName(pngPath)}");
+                                            }
+                                        }
                                     }
                                 }
                                 else
@@ -2546,11 +2699,15 @@ namespace ESMSharp.TES3Terrain
                                     textureExtension = ".png";
                                     foundBaseName = System.IO.Path.GetFileName(pngPath);
                                     
-                                    // Check global texture library again after converting path
-                                    TESLTextureLibrary.TextureEntry cachedEntry2 = TESLTextureLibrary.GetTextureByPath(pngPath);
-                                    if (cachedEntry2 != null)
+                                    // Check library again with PNG path
+                                    if (texture == null)
                                     {
-                                        texture = cachedEntry2.Texture;
+                                        TESLTextureLibrary.TextureEntry cachedEntry2 = TESLTextureLibrary.GetTextureByPath(pngPath);
+                                        if (cachedEntry2 != null)
+                                        {
+                                            texture = cachedEntry2.Texture;
+                                            UnityEngine.Debug.Log($"Reusing cached texture from library (PNG path): {System.IO.Path.GetFileName(pngPath)}");
+                                        }
                                     }
                                 }
                             }
@@ -2573,6 +2730,18 @@ namespace ESMSharp.TES3Terrain
                                         texturePath = pngPath;
                                         textureExtension = ".png";
                                         foundBaseName = System.IO.Path.GetFileName(pngPath);
+                                        
+                                        // Check library again with PNG path after conversion
+                                        if (texture == null)
+                                        {
+                                            TESLTextureLibrary.TextureEntry convertedEntry = TESLTextureLibrary.GetTextureByPath(pngPath);
+                                            if (convertedEntry != null)
+                                            {
+                                                texture = convertedEntry.Texture;
+                                                UnityEngine.Debug.Log($"Reusing cached texture from library (after TGA->PNG conversion): {System.IO.Path.GetFileName(pngPath)}");
+                                            }
+                                        }
+                                        
                                         UnityEngine.Object.DestroyImmediate(tempTexture);
                                     }
                                     else
@@ -2586,11 +2755,15 @@ namespace ESMSharp.TES3Terrain
                                     textureExtension = ".png";
                                     foundBaseName = System.IO.Path.GetFileName(pngPath);
                                     
-                                    // Check global texture library again after converting path
-                                    TESLTextureLibrary.TextureEntry cachedEntry3 = TESLTextureLibrary.GetTextureByPath(pngPath);
-                                    if (cachedEntry3 != null)
+                                    // Check library again with PNG path
+                                    if (texture == null)
                                     {
-                                        texture = cachedEntry3.Texture;
+                                        TESLTextureLibrary.TextureEntry cachedEntry3 = TESLTextureLibrary.GetTextureByPath(pngPath);
+                                        if (cachedEntry3 != null)
+                                        {
+                                            texture = cachedEntry3.Texture;
+                                            UnityEngine.Debug.Log($"Reusing cached texture from library (PNG path): {System.IO.Path.GetFileName(pngPath)}");
+                                        }
                                     }
                                 }
                             }
@@ -2967,35 +3140,6 @@ namespace ESMSharp.TES3Terrain
                 }
             }
             
-            // Find global min/max for normalization
-            float globalMinHeight = float.MaxValue;
-            float globalMaxHeight = float.MinValue;
-            bool foundValidHeight = false;
-            
-            for (int y = 0; y < height; y++)
-            {
-                for (int x = 0; x < width; x++)
-                {
-                    float h = globalHeights[y][x];
-                    if (h != 0f || foundValidHeight) // Allow 0 if we've found other heights
-                    {
-                        if (!foundValidHeight)
-                        {
-                            globalMinHeight = h;
-                            globalMaxHeight = h;
-                            foundValidHeight = true;
-                        }
-                        else
-                        {
-                            if (h < globalMinHeight) globalMinHeight = h;
-                            if (h > globalMaxHeight) globalMaxHeight = h;
-                        }
-                    }
-                }
-            }
-            
-            UnityEngine.Debug.Log($"Height range: min={globalMinHeight}, max={globalMaxHeight}");
-            
             // Extract 64x64 chunks from each cell (skip the 65th row/column which is for neighbor alignment)
             // Calculate number of cells using the same formula as RAW generation: (Abs(Min) + Max)
             // This matches the calculation used in GenerateHeightMap_MergedLands for width/height
@@ -3045,10 +3189,40 @@ namespace ESMSharp.TES3Terrain
             
             UnityEngine.Debug.Log($"Extracted heightmap dimensions: {extractedWidth}x{extractedHeight} (from {width}x{height} with 64x64 per cell)");
             
+            // Find min/max from EXTRACTED heights (not global heights) for PNG normalization
+            float globalMinHeight = float.MaxValue;
+            float globalMaxHeight = float.MinValue;
+            bool foundValidHeight = false;
+            
+            for (int y = 0; y < extractedHeight; y++)
+            {
+                for (int x = 0; x < extractedWidth; x++)
+                {
+                    float h = extractedHeights[y][x];
+                    if (h != 0f || foundValidHeight) // Allow 0 if we've found other heights
+                    {
+                        if (!foundValidHeight)
+                        {
+                            globalMinHeight = h;
+                            globalMaxHeight = h;
+                            foundValidHeight = true;
+                        }
+                        else
+                        {
+                            if (h < globalMinHeight) globalMinHeight = h;
+                            if (h > globalMaxHeight) globalMaxHeight = h;
+                        }
+                    }
+                }
+            }
+            
+            UnityEngine.Debug.Log($"Extracted height range: min={globalMinHeight}, max={globalMaxHeight}, foundValid={foundValidHeight}");
+            
             // Generate PNG from extracted heightmap
             Texture2D heightTexture = new Texture2D(extractedWidth, extractedHeight, TextureFormat.RGBA32, false);
             Color[] heightPixels = new Color[extractedWidth * extractedHeight];
             
+            // Always set pixels, even if all heights are 0
             if (foundValidHeight)
             {
                 // Normalize from actual terrain min/max to preserve brightness
@@ -3067,6 +3241,18 @@ namespace ESMSharp.TES3Terrain
                         float heightValue = (h - globalMinHeight) / globalHeightRange;
                         heightValue = Mathf.Clamp01(heightValue);
                         heightPixels[y * extractedWidth + x] = new UnityEngine.Color(heightValue, heightValue, heightValue, 1f);
+                    }
+                }
+            }
+            else
+            {
+                // If no valid heights found, set all pixels to a default gray value (0.5 = sea level)
+                UnityEngine.Debug.LogWarning("PNG export: No valid heights found, using default gray (0.5) for all pixels");
+                for (int y = 0; y < extractedHeight; y++)
+                {
+                    for (int x = 0; x < extractedWidth; x++)
+                    {
+                        heightPixels[y * extractedWidth + x] = new UnityEngine.Color(0.5f, 0.5f, 0.5f, 1f);
                     }
                 }
             }

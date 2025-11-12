@@ -16,143 +16,123 @@ namespace ESMSharp.TES3
 {
     public class TES3Master
     {
-        private string _esm = "";
-        private string _bsa = "";
-        private Record[] _records;
         TESTerrain testerrain = null;
         NIFModels nifModels = null;
         CellManager cellManager = null;
-        //move this to a more appropriate spot later
-        public long MinCellX = 0, MinCellY = 0, MaxCellX = 0, MaxCellY = 0;
-        public float MaxHeight = 0;
+        
+        // Cell bounds and max height (now retrieved from TESESMLibrary)
+        public long MinCellX { get; private set; } = 0;
+        public long MinCellY { get; private set; } = 0;
+        public long MaxCellX { get; private set; } = 0;
+        public long MaxCellY { get; private set; } = 0;
+        public float MaxHeight { get; private set; } = 0;
 
-        public Record[] Records { get { return _records; } }
-        private bool _loaded = false;
+        public Record[] Records { get { return TESESMLibrary.GetAllRecords(); } }
+        public bool Loaded { get; private set; } = false;
 
-        public bool Loaded { get { return _loaded; } }
+        /// <summary>
+        /// Default constructor - uses global TESESMLibrary and TESBSALibrary
+        /// </summary>
+        public TES3Master()
+        {
+            // Libraries are loaded separately via InitializeLibraries()
+        }
 
+        /// <summary>
+        /// Legacy constructor for backward compatibility
+        /// </summary>
+        [Obsolete("Use InitializeLibraries() instead. This constructor will load a single ESM for backward compatibility.")]
         public TES3Master(string esmfile, string bsafile)
         {
-            _bsa = bsafile;
-            _esm = esmfile;
-            // Open ESM File
-            string esmPath = System.IO.Path.Combine(Application.dataPath, "StreamingAssets", "Data", _esm);
-            if (!System.IO.File.Exists(esmPath))
+            // For backward compatibility, load the single ESM/BSA
+            if (TESESMLibrary.Count == 0)
             {
-                UnityEngine.Debug.LogError($"ESM file not found: {esmPath}");
-                return;
+                TESESMLibrary.LoadESM(esmfile);
+                TESBSALibrary.LoadBSA(bsafile, null, esmfile);
             }
-            using (var reader = new BetterBinaryReader(File.OpenRead(esmPath)))
+            UpdateCellBounds();
+            Loaded = TESESMLibrary.Count > 0;
+        }
+
+        /// <summary>
+        /// Initializes the ESM and BSA libraries by scanning and loading all files
+        /// </summary>
+        /// <param name="dataFolder">Optional custom data folder path (defaults to StreamingAssets/Data)</param>
+        /// <returns>True if at least one ESM was loaded</returns>
+        public static bool InitializeLibraries(string dataFolder = null)
+        {
+            // Scan and load all ESM files
+            int esmCount = TESESMLibrary.ScanAndLoadESMs(dataFolder);
+            if (esmCount == 0)
             {
-                var tes3 = new Record();
-                tes3.Deserialize(reader, reader.ReadString(4));
-
-                if (tes3.Type != "TES3")
-                    throw new Exception("That's not a Morrowind master file.");
-
-
-                Utils.LogBuffer("# Loading Morrowind");
-                Utils.LogBuffer("\t- Record: {0}", tes3.Type);
-
-                var mDico = new List<string>();
-                var mRecords = new List<Record>();
-                Record mRecord = null;
-
-                while (reader.Position < reader.Length)
-                {
-                    string name = reader.ReadString(4);
-                    //Utils.LogBuffer("\t- Record: {0}", name);
-                    switch (name)
-                    {
-                        case "LAND":
-                            //Debug.Log("Land Record");
-                            RecordLand lndrecord = new RecordLand();
-                            lndrecord.Deserialize(reader, name);
-                            mRecord = lndrecord;
-                            if(lndrecord.maxheight>MaxHeight)
-                                MaxHeight = lndrecord.maxheight;
-                            if (lndrecord.MinCellX < MinCellX)
-                                MinCellX = lndrecord.MinCellX;
-                            if (lndrecord.MaxCellX > MaxCellX)
-                                MaxCellX = lndrecord.MaxCellX;
-
-                            if (lndrecord.MinCellY < MinCellY)
-                                MinCellY = lndrecord.MinCellY;
-                            if (lndrecord.MaxCellY > MaxCellY)
-                                MaxCellY = lndrecord.MaxCellY;
-
-                            break;
-
-                        case "LTEX":
-                            //Debug.Log("Land Texture Record");
-                            RecordLTex ltexrecord = new RecordLTex();
-                            ltexrecord.Deserialize(reader, name);
-                            mRecord = ltexrecord;
-                            break;
-
-                        case "CELL":
-                            //Debug.Log("Cell Record");
-                            RecordCell cellrecord = new RecordCell();
-                            cellrecord.Deserialize(reader, name);
-                            mRecord = cellrecord;
-                            break;
-
-                        case "STAT":
-                            //Debug.Log("Static Record");
-                            RecordStat statrecord = new RecordStat();
-                            statrecord.Deserialize(reader, name);
-                            mRecord = statrecord;
-                            break;
-                        default:
-                            mRecord = new Record();
-                            mRecord.Deserialize(reader,name);
-                            break;
-                    }
-
-
-
-                    mRecords.Add(mRecord);
-
-                    if (!mDico.Contains(mRecord.Type))
-                    {
-                        mDico.Add(mRecord.Type);
-                        Utils.LogBuffer("\t- Record: {0}", mRecord.Type);
-                    }
-                }
-                
-                _records = mRecords.ToArray();
-                _loaded = true;
+                Debug.LogError("TES3Master: No ESM files were loaded!");
+                return false;
             }
-            //Debug.Log("Max Terrain Height: " + MaxHeight);
+
+            // Scan and load all BSA files
+            int bsaCount = TESBSALibrary.ScanAndLoadBSAs(dataFolder);
+            if (bsaCount == 0)
+            {
+                Debug.LogWarning("TES3Master: No BSA files were loaded. Some content may be missing.");
+            }
+
+            Debug.Log($"TES3Master: Initialized libraries - {esmCount} ESM(s), {bsaCount} BSA(s)");
+            return true;
+        }
+
+        /// <summary>
+        /// Updates cell bounds from the global ESM library
+        /// </summary>
+        public void UpdateCellBounds()
+        {
+            TESESMLibrary.GetGlobalCellBounds(out long minX, out long minY, out long maxX, out long maxY, out float maxH);
+            MinCellX = minX;
+            MinCellY = minY;
+            MaxCellX = maxX;
+            MaxCellY = maxY;
+            MaxHeight = maxH;
+            Loaded = TESESMLibrary.Count > 0;
         }
 
 
         public void GenerateStatics()
         {
+            Record[] records = TESESMLibrary.GetAllRecords();
+            
+            // Get the primary ESM filename (first loaded ESM, typically Morrowind.esm)
+            string[] loadedESMs = TESESMLibrary.GetLoadedESMFilenames();
+            string primaryESM = loadedESMs.Length > 0 ? loadedESMs[0] : "Morrowind.esm";
+            string primaryBSA = System.IO.Path.GetFileNameWithoutExtension(primaryESM) + ".bsa";
+            
             nifModels = new NIFModels();
-            nifModels.GatherModels(_records, _bsa, _esm);
+            nifModels.GatherModels(records, primaryBSA, primaryESM);
             cellManager = CreateCells();
             
             // Get terrain object if it exists
             Terrain terrain = GameObject.FindFirstObjectByType<Terrain>();
             
-            PlaceStatics placeStatics = new PlaceStatics(_esm, _bsa);
+            PlaceStatics placeStatics = new PlaceStatics(primaryESM, primaryBSA);
             
             // Place different object types separately
-            //placeStatics.PlaceLargeStructures(_records, cellManager);
-            //placeStatics.PlaceTrees(_records, cellManager, terrain);
-            //placeStatics.PlaceGrass(_records, cellManager, terrain);
+            //placeStatics.PlaceLargeStructures(records, cellManager);
+            //placeStatics.PlaceTrees(records, cellManager, terrain);
+            //placeStatics.PlaceGrass(records, cellManager, terrain);
         }
-
+        [Obsolete("Method1 is deprecated, please use GenerateTerrainMaps_MergedLands instead.")]
         public void GenerateTerrainMaps()
         {
+            UpdateCellBounds();
+            Record[] records = TESESMLibrary.GetAllRecords();
+            
+            // Get the primary ESM filename (first loaded ESM, typically Morrowind.esm)
+            string[] loadedESMs = TESESMLibrary.GetLoadedESMFilenames();
+            string primaryESM = loadedESMs.Length > 0 ? loadedESMs[0] : "Morrowind.esm";
+            string primaryBSA = System.IO.Path.GetFileNameWithoutExtension(primaryESM) + ".bsa";
 
             testerrain = new TESTerrain(Convert.ToInt32(MinCellX), Convert.ToInt32(MaxCellX), Convert.ToInt32(MinCellY), Convert.ToInt32(MaxCellY));
-            testerrain.GenerateHeightMap(_records, _esm);
-            testerrain.GatherLandTextures(_records, _bsa, _esm);
-            //testerrain.GenerateUnityTerrain(_records, "Morrowind.esm", terrainHeight: 128f, waterY: 23f);
-
-
+            testerrain.GenerateHeightMap(records, primaryESM);
+            testerrain.GatherLandTextures(records, primaryBSA, primaryESM);
+            //testerrain.GenerateUnityTerrain(records, primaryESM, terrainHeight: 128f, waterY: 23f);
         }
 
 
@@ -161,8 +141,14 @@ namespace ESMSharp.TES3
         /// </summary>
         public void GenerateTerrainMaps_CellsLands()
         {
+            UpdateCellBounds();
+            Record[] records = TESESMLibrary.GetAllRecords();
+            
+            string[] loadedESMs = TESESMLibrary.GetLoadedESMFilenames();
+            string primaryESM = loadedESMs.Length > 0 ? loadedESMs[0] : "Morrowind.esm";
+            
             testerrain = new TESTerrain(Convert.ToInt32(MinCellX), Convert.ToInt32(MaxCellX), Convert.ToInt32(MinCellY), Convert.ToInt32(MaxCellY));
-            testerrain.GenerateHeightMap_Cells(_records, _esm);
+            testerrain.GenerateHeightMap_Cells(records, primaryESM);
         }
 
         /// <summary>
@@ -171,28 +157,72 @@ namespace ESMSharp.TES3
         /// </summary>
         public void GenerateTerrainMaps_MergedLands()
         {
+            // Ensure libraries are initialized
+            if (TESESMLibrary.Count == 0)
+            {
+                UnityEngine.Debug.LogWarning("TES3Master: ESM library not initialized. Calling InitializeLibraries()...");
+                if (!InitializeLibraries())
+                {
+                    UnityEngine.Debug.LogError("TES3Master: Failed to initialize ESM/BSA libraries!");
+                    return;
+                }
+            }
+            
+            UpdateCellBounds();
+            Record[] records = TESESMLibrary.GetAllRecords();
+            
+            UnityEngine.Debug.Log($"TES3Master.GenerateTerrainMaps_MergedLands: Retrieved {records?.Length ?? 0} records from library");
+            
+            string[] loadedESMs = TESESMLibrary.GetLoadedESMFilenames();
+            string primaryESM = loadedESMs.Length > 0 ? loadedESMs[0] : "Morrowind.esm";
+            string primaryBSA = System.IO.Path.GetFileNameWithoutExtension(primaryESM) + ".bsa";
+
             testerrain = new TESTerrain(Convert.ToInt32(MinCellX), Convert.ToInt32(MaxCellX), Convert.ToInt32(MinCellY), Convert.ToInt32(MaxCellY));
-            testerrain.GenerateHeightMap_MergedLands(_records, _esm);
+            testerrain.GenerateHeightMap_MergedLands(records, primaryESM);
+            testerrain.GatherLandTextures(records, primaryBSA, primaryESM);
         }
 
         public void GenerateCellsTerrain()
         {
+            Record[] records = TESESMLibrary.GetAllRecords();
+            
+            string[] loadedESMs = TESESMLibrary.GetLoadedESMFilenames();
+            string primaryESM = loadedESMs.Length > 0 ? loadedESMs[0] : "Morrowind.esm";
+            
             // Use global constants from TESGlobals
             const float MORROWIND_MAX_TERRAIN_HEIGHT = 32768f * TESGlobals.MORROWIND_TO_TERRAIN_SCALE; // 256 units
             // Sea level is 0 in Morrowind, which maps to Y=0 in Unity
             // Terrain is positioned at Y=-16 (quarter cell lower) so sea level aligns properly
             // This allows underwater areas to be below Y=0 and water plane at Y=0 covers them
-            testerrain.GenerateUnityTerrainCells(_records, "Morrowind.esm", MORROWIND_MAX_TERRAIN_HEIGHT, 0f);
+            testerrain.GenerateUnityTerrainCells(records, primaryESM, MORROWIND_MAX_TERRAIN_HEIGHT, 0f);
         }
 
         public void GenerateTerrain()
         {
+            // Ensure libraries are initialized
+            if (TESESMLibrary.Count == 0)
+            {
+                UnityEngine.Debug.LogWarning("TES3Master: ESM library not initialized. Calling InitializeLibraries()...");
+                if (!InitializeLibraries())
+                {
+                    UnityEngine.Debug.LogError("TES3Master: Failed to initialize ESM/BSA libraries!");
+                    return;
+                }
+            }
+            
+            Record[] records = TESESMLibrary.GetAllRecords();
+            
+            UnityEngine.Debug.Log($"TES3Master.GenerateTerrain: Retrieved {records?.Length ?? 0} records from library");
+            
+            string[] loadedESMs = TESESMLibrary.GetLoadedESMFilenames();
+            string primaryESM = loadedESMs.Length > 0 ? loadedESMs[0] : "Morrowind.esm";
+            
             // Terrain height and Y offset are now calculated automatically from the actual height range
             // The function loads the height range from the saved JSON file and calculates:
             // - terrainHeight = actualHeightRange * (64f / 8192f)
             // - terrainYOffset = actualMinHeight * (64f / 8192f)
             // This matches OpenMW's approach of using actual min/max from terrain data
-            testerrain.GenerateUnityTerrain(_records, "Morrowind.esm", 0f, 0f);
+            testerrain.GenerateUnityTerrain(records, primaryESM, 0f, 0f);
         }
 
 
@@ -202,8 +232,14 @@ namespace ESMSharp.TES3
         /// </summary>
         public CellManager CreateCells(Transform parent = null)
         {
+            Record[] records = TESESMLibrary.GetAllRecords();
+            
+            string[] loadedESMs = TESESMLibrary.GetLoadedESMFilenames();
+            string primaryESM = loadedESMs.Length > 0 ? loadedESMs[0] : "Morrowind.esm";
+            string primaryBSA = System.IO.Path.GetFileNameWithoutExtension(primaryESM) + ".bsa";
+            
             ESMSharp.TES3Terrain.CellManager cellManager = new ESMSharp.TES3Terrain.CellManager();
-            cellManager.CreateCells(_records, parent, _esm, _bsa);
+            cellManager.CreateCells(records, parent, primaryESM, primaryBSA);
             
             return cellManager;
         }
@@ -213,8 +249,14 @@ namespace ESMSharp.TES3
         /// </summary>
         public void PlaceLargeStructures(CellManager cellManager = null, Transform parent = null)
         {
-            PlaceStatics placeStatics = new PlaceStatics(_esm, _bsa);
-            placeStatics.PlaceLargeStructures(_records, cellManager, parent);
+            Record[] records = TESESMLibrary.GetAllRecords();
+            
+            string[] loadedESMs = TESESMLibrary.GetLoadedESMFilenames();
+            string primaryESM = loadedESMs.Length > 0 ? loadedESMs[0] : "Morrowind.esm";
+            string primaryBSA = System.IO.Path.GetFileNameWithoutExtension(primaryESM) + ".bsa";
+            
+            PlaceStatics placeStatics = new PlaceStatics(primaryESM, primaryBSA);
+            placeStatics.PlaceLargeStructures(records, cellManager, parent);
         }
 
         /// <summary>
@@ -222,9 +264,15 @@ namespace ESMSharp.TES3
         /// </summary>
         public void PlaceTrees(CellManager cellManager = null)
         {
+            Record[] records = TESESMLibrary.GetAllRecords();
+            
+            string[] loadedESMs = TESESMLibrary.GetLoadedESMFilenames();
+            string primaryESM = loadedESMs.Length > 0 ? loadedESMs[0] : "Morrowind.esm";
+            string primaryBSA = System.IO.Path.GetFileNameWithoutExtension(primaryESM) + ".bsa";
+            
             Terrain terrain = GameObject.FindFirstObjectByType<Terrain>();
-            PlaceStatics placeStatics = new PlaceStatics(_esm, _bsa);
-            placeStatics.PlaceTrees(_records, cellManager, terrain);
+            PlaceStatics placeStatics = new PlaceStatics(primaryESM, primaryBSA);
+            placeStatics.PlaceTrees(records, cellManager, terrain);
         }
 
         /// <summary>
@@ -232,9 +280,15 @@ namespace ESMSharp.TES3
         /// </summary>
         public void PlaceGrass(CellManager cellManager = null)
         {
+            Record[] records = TESESMLibrary.GetAllRecords();
+            
+            string[] loadedESMs = TESESMLibrary.GetLoadedESMFilenames();
+            string primaryESM = loadedESMs.Length > 0 ? loadedESMs[0] : "Morrowind.esm";
+            string primaryBSA = System.IO.Path.GetFileNameWithoutExtension(primaryESM) + ".bsa";
+            
             Terrain terrain = GameObject.FindFirstObjectByType<Terrain>();
-            PlaceStatics placeStatics = new PlaceStatics(_esm, _bsa);
-            placeStatics.PlaceGrass(_records, cellManager, terrain);
+            PlaceStatics placeStatics = new PlaceStatics(primaryESM, primaryBSA);
+            placeStatics.PlaceGrass(records, cellManager, terrain);
         }
 
     }

@@ -43,32 +43,21 @@ namespace UOMW.Editor
                 if (_esmviewer.tesesm.Loaded)
                 {
                     GUILayout.Label("Map Data");
+
                     if (GUILayout.Button("Generate Height Map"))
-                    {
-                        _esmviewer.tesesm.GenerateTerrainMaps();
-                        
-                    }
-                    if (GUILayout.Button("Generate Height Map (MergedLands Test)"))
                     {
                         _esmviewer.tesesm.GenerateTerrainMaps_MergedLands();
                     }
-                    if (GUILayout.Button("Generate Height Map Cells"))
-                    {
-                        _esmviewer.tesesm.GenerateTerrainMaps_CellsLands();
-                    }
+
                     GUILayout.Label("Unity Terrain");
                     if (GUILayout.Button("Generate Terrain"))
                     {
                         _esmviewer.tesesm.GenerateTerrain();
 
                     }
-                    if (GUILayout.Button("Generate Cells Terrain"))
-                    {
-                        _esmviewer.tesesm.GenerateCellsTerrain();
 
-                    }
                     GUILayout.Label("Statics");
-                    if (GUILayout.Button("Generate Map Statics"))
+                    if (GUILayout.Button("Generate Map Cells"))
                     {
                         _esmviewer.tesesm.GenerateStatics();
 
