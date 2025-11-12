@@ -195,7 +195,19 @@ namespace ESMSharp.TES3
                                 statrecord.Deserialize(reader, name);
                                 mRecord = statrecord;
                                 break;
-                                
+
+                            case "GMST":
+                                RecordGmst gmstrecord = new RecordGmst();
+                                gmstrecord.Deserialize(reader, name);
+                                mRecord = gmstrecord;
+                                break;
+
+                            case "GLOB":
+                                RecordGlob globrecord = new RecordGlob();
+                                globrecord.Deserialize(reader, name);
+                                mRecord = globrecord;
+                                break;
+
                             default:
                                 mRecord = new Record();
                                 mRecord.Deserialize(reader, name);
