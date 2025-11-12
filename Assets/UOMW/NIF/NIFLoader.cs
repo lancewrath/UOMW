@@ -1542,6 +1542,7 @@ namespace ESMSharp.NIF
                     switch (image.Format)
                     {
                         case Pfim.ImageFormat.Rgba32:
+                            // RGBA32: 4 bytes per pixel (B, G, R, A) - DDS uses BGR order, swap R and B
                             for (int y = 0; y < height; y++)
                             {
                                 for (int x = 0; x < width; x++)
@@ -1551,16 +1552,17 @@ namespace ESMSharp.NIF
                                     if (pixelOffset + 3 < image.Data.Length)
                                     {
                                         pixels[y * width + x] = new Color(
-                                            image.Data[pixelOffset] / 255f,
-                                            image.Data[pixelOffset + 1] / 255f,
-                                            image.Data[pixelOffset + 2] / 255f,
-                                            image.Data[pixelOffset + 3] / 255f
+                                            image.Data[pixelOffset + 2] / 255f, // R (was B)
+                                            image.Data[pixelOffset + 1] / 255f, // G
+                                            image.Data[pixelOffset] / 255f,     // B (was R)
+                                            image.Data[pixelOffset + 3] / 255f // A
                                         );
                                     }
                                 }
                             }
                             break;
                         case Pfim.ImageFormat.Rgb24:
+                            // RGB24: 3 bytes per pixel (B, G, R) - DDS uses BGR order, swap R and B
                             for (int y = 0; y < height; y++)
                             {
                                 for (int x = 0; x < width; x++)
@@ -1570,9 +1572,9 @@ namespace ESMSharp.NIF
                                     if (pixelOffset + 2 < image.Data.Length)
                                     {
                                         pixels[y * width + x] = new Color(
-                                            image.Data[pixelOffset] / 255f,
-                                            image.Data[pixelOffset + 1] / 255f,
-                                            image.Data[pixelOffset + 2] / 255f,
+                                            image.Data[pixelOffset + 2] / 255f, // R (was B)
+                                            image.Data[pixelOffset + 1] / 255f, // G
+                                            image.Data[pixelOffset] / 255f,     // B (was R)
                                             1f
                                         );
                                     }
@@ -1590,7 +1592,7 @@ namespace ESMSharp.NIF
                         return false;
                     }
 
-                    // Create Unity texture and encode to PNG
+                    // Create Unity texture in RGBA32 format (32-bit with alpha) for masking support (trees, etc.)
                     Texture2D texture = new Texture2D(width, height, TextureFormat.RGBA32, false);
                     texture.SetPixels(pixels);
                     texture.Apply();

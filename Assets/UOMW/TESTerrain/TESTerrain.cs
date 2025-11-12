@@ -61,7 +61,7 @@ namespace ESMSharp.TES3Terrain
                 TextureImporter importer = AssetImporter.GetAtPath(assetPath) as TextureImporter;
                 if (importer != null)
                 {
-                    importer.alphaSource = TextureImporterAlphaSource.None;
+                    importer.alphaSource = TextureImporterAlphaSource.FromGrayScale;
                     importer.SaveAndReimport();
                     AssetDatabase.Refresh();
                 }
@@ -100,7 +100,7 @@ namespace ESMSharp.TES3Terrain
                     switch (image.Format)
                     {
                         case ImageFormat.Rgba32:
-                            // RGBA32: 4 bytes per pixel (R, G, B, A)
+                            // RGBA32: 4 bytes per pixel (B, G, R, A) - DDS uses BGR order, swap R and B
                             for (int y = 0; y < height; y++)
                             {
                                 for (int x = 0; x < width; x++)
@@ -110,10 +110,10 @@ namespace ESMSharp.TES3Terrain
                                     if (pixelOffset + 3 < image.Data.Length)
                                     {
                                         pixels[y * width + x] = new Color(
-                                            image.Data[pixelOffset] / 255f,
-                                            image.Data[pixelOffset + 1] / 255f,
-                                            image.Data[pixelOffset + 2] / 255f,
-                                            image.Data[pixelOffset + 3] / 255f
+                                            image.Data[pixelOffset + 2] / 255f, // R (was B)
+                                            image.Data[pixelOffset + 1] / 255f, // G
+                                            image.Data[pixelOffset] / 255f,     // B (was R)
+                                            image.Data[pixelOffset + 3] / 255f // A
                                         );
                                     }
                                 }
@@ -121,7 +121,7 @@ namespace ESMSharp.TES3Terrain
                             break;
 
                         case ImageFormat.Rgb24:
-                            // RGB24: 3 bytes per pixel (R, G, B)
+                            // RGB24: 3 bytes per pixel (B, G, R) - DDS uses BGR order, swap R and B
                             for (int y = 0; y < height; y++)
                             {
                                 for (int x = 0; x < width; x++)
@@ -131,9 +131,9 @@ namespace ESMSharp.TES3Terrain
                                     if (pixelOffset + 2 < image.Data.Length)
                                     {
                                         pixels[y * width + x] = new Color(
-                                            image.Data[pixelOffset] / 255f,
-                                            image.Data[pixelOffset + 1] / 255f,
-                                            image.Data[pixelOffset + 2] / 255f,
+                                            image.Data[pixelOffset + 2] / 255f, // R (was B)
+                                            image.Data[pixelOffset + 1] / 255f, // G
+                                            image.Data[pixelOffset] / 255f,     // B (was R)
                                             1f
                                         );
                                     }
@@ -188,7 +188,7 @@ namespace ESMSharp.TES3Terrain
                             int bytesPerPixel = stride / width;
                             if (bytesPerPixel == 4)
                             {
-                                // Assume RGBA32
+                                // Assume RGBA32 (B, G, R, A) - DDS uses BGR order, swap R and B
                                 for (int y = 0; y < height; y++)
                                 {
                                     for (int x = 0; x < width; x++)
@@ -198,10 +198,10 @@ namespace ESMSharp.TES3Terrain
                                         if (pixelOffset + 3 < image.Data.Length)
                                         {
                                             pixels[y * width + x] = new Color(
-                                                image.Data[pixelOffset] / 255f,
-                                                image.Data[pixelOffset + 1] / 255f,
-                                                image.Data[pixelOffset + 2] / 255f,
-                                                image.Data[pixelOffset + 3] / 255f
+                                                image.Data[pixelOffset + 2] / 255f, // R (was B)
+                                                image.Data[pixelOffset + 1] / 255f, // G
+                                                image.Data[pixelOffset] / 255f,     // B (was R)
+                                                image.Data[pixelOffset + 3] / 255f // A
                                             );
                                         }
                                     }
@@ -209,7 +209,7 @@ namespace ESMSharp.TES3Terrain
                             }
                             else if (bytesPerPixel == 3)
                             {
-                                // Assume RGB24
+                                // Assume RGB24 (B, G, R) - DDS uses BGR order, swap R and B
                                 for (int y = 0; y < height; y++)
                                 {
                                     for (int x = 0; x < width; x++)
@@ -219,9 +219,9 @@ namespace ESMSharp.TES3Terrain
                                         if (pixelOffset + 2 < image.Data.Length)
                                         {
                                             pixels[y * width + x] = new Color(
-                                                image.Data[pixelOffset] / 255f,
-                                                image.Data[pixelOffset + 1] / 255f,
-                                                image.Data[pixelOffset + 2] / 255f,
+                                                image.Data[pixelOffset + 2] / 255f, // R (was B)
+                                                image.Data[pixelOffset + 1] / 255f, // G
+                                                image.Data[pixelOffset] / 255f,     // B (was R)
                                                 1f
                                             );
                                         }
@@ -242,7 +242,8 @@ namespace ESMSharp.TES3Terrain
                         return false;
                     }
 
-                    // Create Unity texture and encode to PNG
+                    // Create Unity texture in RGBA32 format (32-bit with alpha) for terrain
+                    // Alpha will be set to "From grayscale" in import settings to prevent shininess
                     Texture2D texture = new Texture2D(width, height, TextureFormat.RGBA32, false);
                     texture.SetPixels(pixels);
                     texture.Apply();
@@ -491,11 +492,23 @@ namespace ESMSharp.TES3Terrain
                                             Texture2D tempTexture = new Texture2D(2, 2);
                                             if (tempTexture.LoadImage(fileData))
                                             {
-                                                byte[] pngData = tempTexture.EncodeToPNG();
+                                                // Keep as RGBA32 (32-bit with alpha) - alpha will be set to "From grayscale" in import settings
+                                                Texture2D rgbaTexture = new Texture2D(tempTexture.width, tempTexture.height, TextureFormat.RGBA32, false);
+                                                Color32[] pixels = tempTexture.GetPixels32();
+                                                // Ensure all alpha values are 255 (opaque) - Unity will use grayscale for alpha via import settings
+                                                for (int i = 0; i < pixels.Length; i++)
+                                                {
+                                                    pixels[i].a = 255;
+                                                }
+                                                rgbaTexture.SetPixels32(pixels);
+                                                rgbaTexture.Apply();
+                                                
+                                                byte[] pngData = rgbaTexture.EncodeToPNG();
                                                 System.IO.File.WriteAllBytes(pngPath, pngData);
                                                 extractedCount++;
-                                                //UnityEngine.Debug.Log($"Converted cached TGA to PNG: {baseNameNoExt}.tga -> {baseNameNoExt}.png");
+                                                //UnityEngine.Debug.Log($"Converted cached TGA to PNG (32-bit): {baseNameNoExt}.tga -> {baseNameNoExt}.png");
                                                 UnityEngine.Object.DestroyImmediate(tempTexture);
+                                                UnityEngine.Object.DestroyImmediate(rgbaTexture);
                                                 #if UNITY_EDITOR
                                                 SetTextureImportSettings(pngPath);
                                                 #endif
@@ -668,12 +681,25 @@ namespace ESMSharp.TES3Terrain
                                         Texture2D tempTexture = UnityEditor.AssetDatabase.LoadAssetAtPath<Texture2D>(assetPath);
                                         if (tempTexture != null)
                                         {
-                                            byte[] pngData = tempTexture.EncodeToPNG();
+                                            // Keep as RGBA32 (32-bit with alpha) - alpha will be set to "From grayscale" in import settings
+                                            Texture2D rgbaTexture = new Texture2D(tempTexture.width, tempTexture.height, TextureFormat.RGBA32, false);
+                                            Color32[] pixels = tempTexture.GetPixels32();
+                                            // Ensure all alpha values are 255 (opaque) - Unity will use grayscale for alpha via import settings
+                                            for (int i = 0; i < pixels.Length; i++)
+                                            {
+                                                pixels[i].a = 255;
+                                            }
+                                            rgbaTexture.SetPixels32(pixels);
+                                            rgbaTexture.Apply();
+                                            
+                                            byte[] pngData = rgbaTexture.EncodeToPNG();
                                             System.IO.File.WriteAllBytes(pngOutputPath, pngData);
                                             System.IO.File.Delete(outputPath);
                                             UnityEditor.AssetDatabase.DeleteAsset(assetPath);
                                             extractedCount++;
-                                            //UnityEngine.Debug.Log($"Extracted and converted DDS->PNG (via AssetDatabase): {foundPath} -> {pngOutputPath} ({tempTexture.width}x{tempTexture.height})");
+                                            //UnityEngine.Debug.Log($"Extracted and converted DDS->PNG (32-bit via AssetDatabase): {foundPath} -> {pngOutputPath} ({tempTexture.width}x{tempTexture.height})");
+                                            
+                                            UnityEngine.Object.DestroyImmediate(rgbaTexture);
                                         }
                                         else
                                         {
@@ -704,18 +730,31 @@ namespace ESMSharp.TES3Terrain
                                     Texture2D tempTexture = new Texture2D(2, 2);
                                     if (tempTexture.LoadImage(fileData))
                                     {
+                                        // Keep as RGBA32 (32-bit with alpha) - alpha will be set to "From grayscale" in import settings
+                                        Texture2D rgbaTexture = new Texture2D(tempTexture.width, tempTexture.height, TextureFormat.RGBA32, false);
+                                        Color32[] pixels = tempTexture.GetPixels32();
+                                        // Ensure all alpha values are 255 (opaque) - Unity will use grayscale for alpha via import settings
+                                        for (int i = 0; i < pixels.Length; i++)
+                                        {
+                                            pixels[i].a = 255;
+                                        }
+                                        rgbaTexture.SetPixels32(pixels);
+                                        rgbaTexture.Apply();
+                                        
                                         // Convert to PNG
-                                        byte[] pngData = tempTexture.EncodeToPNG();
+                                        byte[] pngData = rgbaTexture.EncodeToPNG();
                                         string pngFilename = System.IO.Path.ChangeExtension(baseFilename, ".png");
                                         outputPath = System.IO.Path.Combine(outputDir, pngFilename);
                                         
                                         System.IO.File.WriteAllBytes(outputPath, pngData);
                                         extractedCount++;
+                                        
+                                        UnityEngine.Object.DestroyImmediate(tempTexture);
+                                        UnityEngine.Object.DestroyImmediate(rgbaTexture);
                                         //UnityEngine.Debug.Log($"Extracted and converted TGA->PNG: {foundPath} -> {outputPath} ({tempTexture.width}x{tempTexture.height})");
                                         #if UNITY_EDITOR
                                         SetTextureImportSettings(outputPath);
                                         #endif
-                                        UnityEngine.Object.DestroyImmediate(tempTexture);
                                     }
                                     else
                                     {
@@ -834,21 +873,34 @@ namespace ESMSharp.TES3Terrain
                                     }
                                     else if (actualExtension == ".tga")
                                     {
-                                        // Try to convert TGA to PNG
+                                        // Try to convert TGA to PNG (24-bit RGB, no alpha)
                                         byte[] fileData = System.IO.File.ReadAllBytes(fileSystemPath);
                                         Texture2D tempTexture = new Texture2D(2, 2);
                                         if (tempTexture.LoadImage(fileData))
                                         {
-                                            byte[] pngData = tempTexture.EncodeToPNG();
+                                            // Keep as RGBA32 (32-bit with alpha) - alpha will be set to "From grayscale" in import settings
+                                            Texture2D rgbaTexture = new Texture2D(tempTexture.width, tempTexture.height, TextureFormat.RGBA32, false);
+                                            Color32[] pixels = tempTexture.GetPixels32();
+                                            // Ensure all alpha values are 255 (opaque) - Unity will use grayscale for alpha via import settings
+                                            for (int i = 0; i < pixels.Length; i++)
+                                            {
+                                                pixels[i].a = 255;
+                                            }
+                                            rgbaTexture.SetPixels32(pixels);
+                                            rgbaTexture.Apply();
+                                            
+                                            byte[] pngData = rgbaTexture.EncodeToPNG();
                                             string pngFilename = System.IO.Path.ChangeExtension(baseFilename, ".png");
                                             string pngOutputPath = System.IO.Path.Combine(outputDir, pngFilename);
                                             System.IO.File.WriteAllBytes(pngOutputPath, pngData);
                                             extractedCount++;
-                                            //UnityEngine.Debug.Log($"Copied and converted TGA->PNG from file system: {fileSystemPath} -> {pngOutputPath}");
+                                            //UnityEngine.Debug.Log($"Copied and converted TGA->PNG (32-bit) from file system: {fileSystemPath} -> {pngOutputPath}");
+                                            
+                                            UnityEngine.Object.DestroyImmediate(tempTexture);
+                                            UnityEngine.Object.DestroyImmediate(rgbaTexture);
                                             #if UNITY_EDITOR
                                             SetTextureImportSettings(pngOutputPath);
                                             #endif
-                                            UnityEngine.Object.DestroyImmediate(tempTexture);
                                         }
                                         else
                                         {
@@ -1522,18 +1574,33 @@ namespace ESMSharp.TES3Terrain
                                 string pngPath = System.IO.Path.ChangeExtension(texturePath, ".png");
                                 if (!System.IO.File.Exists(pngPath))
                                 {
-                                    // Convert TGA to PNG
+                                    // Convert TGA to PNG (32-bit RGBA, alpha from grayscale)
                                     UnityEngine.Debug.Log($"TGA file found but no PNG exists, converting: {texturePath}");
                                     byte[] tgaData = System.IO.File.ReadAllBytes(texturePath);
                                     Texture2D tempTexture = new Texture2D(2, 2);
                                     if (tempTexture.LoadImage(tgaData))
                                     {
-                                        byte[] pngData = tempTexture.EncodeToPNG();
+                                        // Keep as RGBA32 (32-bit with alpha) - alpha will be set to "From grayscale" in import settings
+                                        Texture2D rgbaTexture = new Texture2D(tempTexture.width, tempTexture.height, TextureFormat.RGBA32, false);
+                                        Color32[] pixels = tempTexture.GetPixels32();
+                                        // Ensure all alpha values are 255 (opaque) - Unity will use grayscale for alpha via import settings
+                                        for (int i = 0; i < pixels.Length; i++)
+                                        {
+                                            pixels[i].a = 255;
+                                        }
+                                        rgbaTexture.SetPixels32(pixels);
+                                        rgbaTexture.Apply();
+                                        
+                                        byte[] pngData = rgbaTexture.EncodeToPNG();
                                         System.IO.File.WriteAllBytes(pngPath, pngData);
-                                        UnityEngine.Debug.Log($"Successfully converted TGA to PNG: {texturePath} -> {pngPath}");
+                                        UnityEngine.Debug.Log($"Successfully converted TGA to PNG (32-bit): {texturePath} -> {pngPath}");
                                         #if UNITY_EDITOR
                                         SetTextureImportSettings(pngPath);
                                         #endif
+                                        
+                                        UnityEngine.Object.DestroyImmediate(tempTexture);
+                                        UnityEngine.Object.DestroyImmediate(rgbaTexture);
+                                        
                                         texturePath = pngPath; // Use PNG instead
                                         textureExtension = ".png";
                                         foundBaseName = System.IO.Path.GetFileName(pngPath);
@@ -1618,6 +1685,11 @@ namespace ESMSharp.TES3Terrain
                                     texture.anisoLevel = 9;
                                     UnityEngine.Debug.Log($"Loaded DDS texture layer {terrainLayers.Count}: {foundBaseName ?? System.IO.Path.GetFileName(texturePath)} ({texture.width}x{texture.height})");
                                     
+                                    // Set import settings to disable alpha source (prevents shininess)
+                                    #if UNITY_EDITOR
+                                    SetTextureImportSettings(texturePath);
+                                    #endif
+                                    
                                     // Add to global texture library
                                     string textureName = names.primary ?? names.fallback ?? foundBaseName ?? System.IO.Path.GetFileNameWithoutExtension(texturePath);
                                     TESLTextureLibrary.AddTexture(textureName, ltexIndex, vtexIndex, texturePath, texture);
@@ -1652,6 +1724,11 @@ namespace ESMSharp.TES3Terrain
                                     #endif
 
                                     UnityEngine.Debug.Log($"Loaded texture layer {terrainLayers.Count}: {foundBaseName ?? System.IO.Path.GetFileName(texturePath)} ({texture.width}x{texture.height})");
+                                    
+                                    // Set import settings to disable alpha source (prevents shininess)
+                                    #if UNITY_EDITOR
+                                    SetTextureImportSettings(texturePath);
+                                    #endif
                                     
                                     // Add to global texture library
                                     string textureName = names.primary ?? names.fallback ?? foundBaseName ?? System.IO.Path.GetFileNameWithoutExtension(texturePath);
@@ -2717,16 +2794,31 @@ namespace ESMSharp.TES3Terrain
                                 string pngPath = System.IO.Path.ChangeExtension(texturePath, ".png");
                                 if (!System.IO.File.Exists(pngPath))
                                 {
-                                    // Convert TGA to PNG
+                                    // Convert TGA to PNG (32-bit RGBA, alpha from grayscale)
                                     byte[] tgaData = System.IO.File.ReadAllBytes(texturePath);
                                     Texture2D tempTexture = new Texture2D(2, 2);
                                     if (tempTexture.LoadImage(tgaData))
                                     {
-                                        byte[] pngData = tempTexture.EncodeToPNG();
+                                        // Keep as RGBA32 (32-bit with alpha) - alpha will be set to "From grayscale" in import settings
+                                        Texture2D rgbaTexture = new Texture2D(tempTexture.width, tempTexture.height, TextureFormat.RGBA32, false);
+                                        Color32[] pixels = tempTexture.GetPixels32();
+                                        // Ensure all alpha values are 255 (opaque) - Unity will use grayscale for alpha via import settings
+                                        for (int i = 0; i < pixels.Length; i++)
+                                        {
+                                            pixels[i].a = 255;
+                                        }
+                                        rgbaTexture.SetPixels32(pixels);
+                                        rgbaTexture.Apply();
+                                        
+                                        byte[] pngData = rgbaTexture.EncodeToPNG();
                                         System.IO.File.WriteAllBytes(pngPath, pngData);
                                         #if UNITY_EDITOR
                                         SetTextureImportSettings(pngPath);
                                         #endif
+                                        
+                                        UnityEngine.Object.DestroyImmediate(tempTexture);
+                                        UnityEngine.Object.DestroyImmediate(rgbaTexture);
+                                        
                                         texturePath = pngPath;
                                         textureExtension = ".png";
                                         foundBaseName = System.IO.Path.GetFileName(pngPath);
@@ -2792,6 +2884,11 @@ namespace ESMSharp.TES3Terrain
                                         texture.Apply(true, false);
                                         #else
                                         texture.Apply(false, false);
+                                        #endif
+                                        
+                                        // Set import settings to disable alpha source (prevents shininess)
+                                        #if UNITY_EDITOR
+                                        SetTextureImportSettings(texturePath);
                                         #endif
                                         
                                         // Add to global texture library
