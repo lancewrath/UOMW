@@ -20,6 +20,7 @@ namespace ESMSharp.TES3
             public ushort VTEXIndex { get; set; }          // VTEX index (VTEX = LTEX + 1, used for terrain)
             public string Filename { get; set; }          // Full file path or filename
             public Texture2D Texture { get; set; }        // The actual Texture2D object
+            public Texture2D NormalMap { get; set; }      // Normal map texture (generated or loaded)
             
             public TextureEntry(string name, int ltexIndex, ushort vtexIndex, string filename, Texture2D texture)
             {
@@ -28,6 +29,7 @@ namespace ESMSharp.TES3
                 VTEXIndex = vtexIndex;
                 Filename = filename;
                 Texture = texture;
+                NormalMap = null;
             }
         }
         
@@ -146,6 +148,33 @@ namespace ESMSharp.TES3
         {
             TextureEntry entry = GetTextureByPath(filename);
             return entry?.Texture;
+        }
+        
+        /// <summary>
+        /// Gets the normal map texture by file path. Returns null if not found or not generated.
+        /// </summary>
+        public static Texture2D GetNormalMap(string filename)
+        {
+            TextureEntry entry = GetTextureByPath(filename);
+            return entry?.NormalMap;
+        }
+        
+        /// <summary>
+        /// Gets the normal map texture by VTEX index. Returns null if not found or not generated.
+        /// </summary>
+        public static Texture2D GetNormalMapByVTEXIndex(ushort vtexIndex)
+        {
+            TextureEntry entry = GetTextureByVTEXIndex(vtexIndex);
+            return entry?.NormalMap;
+        }
+        
+        /// <summary>
+        /// Gets the normal map texture by LTEX index. Returns null if not found or not generated.
+        /// </summary>
+        public static Texture2D GetNormalMapByLTEXIndex(int ltexIndex)
+        {
+            TextureEntry entry = GetTextureByLTEXIndex(ltexIndex);
+            return entry?.NormalMap;
         }
         
         /// <summary>
@@ -552,6 +581,160 @@ namespace ESMSharp.TES3
                 {
                     Debug.LogWarning($"TESLTextureLibrary: Error loading texture {foundPath}: {ex.Message}");
                 }
+            }
+            
+            return null;
+        }
+        
+        /// <summary>
+        /// Generates a normal map from a diffuse texture using the Sobel operator.
+        /// </summary>
+        /// <param name="diffuseTexture">The source diffuse texture</param>
+        /// <param name="strength">Strength of the normal map effect (default 1.0f)</param>
+        /// <returns>Generated normal map texture, or null if generation failed</returns>
+        public static Texture2D GenerateNormalMap(Texture2D diffuseTexture, float strength = 1.0f)
+        {
+            if (diffuseTexture == null)
+                return null;
+            
+            try
+            {
+                int width = diffuseTexture.width;
+                int height = diffuseTexture.height;
+                
+                // Make sure texture is readable
+                #if UNITY_EDITOR
+                if (!diffuseTexture.isReadable)
+                {
+                    Debug.LogWarning($"TESLTextureLibrary: Texture {diffuseTexture.name} is not readable, cannot generate normal map");
+                    return null;
+                }
+                #endif
+                
+                Texture2D normalMap = new Texture2D(width, height, TextureFormat.RGB24, false);
+                Color32[] normalPixels = new Color32[width * height];
+                
+                // Get all pixels from the diffuse texture
+                Color32[] diffusePixels = diffuseTexture.GetPixels32();
+                
+                for (int y = 0; y < height; y++)
+                {
+                    for (int x = 0; x < width; x++)
+                    {
+                        // Sample the brightness of adjacent pixels (treating the texture as a height map)
+                        float left = (x > 0) ? GetBrightness(diffusePixels[y * width + (x - 1)]) : GetBrightness(diffusePixels[y * width + x]);
+                        float right = (x < width - 1) ? GetBrightness(diffusePixels[y * width + (x + 1)]) : GetBrightness(diffusePixels[y * width + x]);
+                        float up = (y > 0) ? GetBrightness(diffusePixels[(y - 1) * width + x]) : GetBrightness(diffusePixels[y * width + x]);
+                        float down = (y < height - 1) ? GetBrightness(diffusePixels[(y + 1) * width + x]) : GetBrightness(diffusePixels[y * width + x]);
+                        
+                        // Calculate the X and Y components of the normal vector (Sobel logic)
+                        float x_vector = (left - right) * strength;
+                        float y_vector = (up - down) * strength;
+                        float z_vector = 1.0f; // Depth (always pointing "out" towards the viewer)
+                        
+                        // Transform from -1 to 1 space into 0 to 1 color space, then scale to 0-255 RGB values
+                        int r = Mathf.Clamp((int)((x_vector + 1.0f) * 0.5f * 255.0f), 0, 255);
+                        int g = Mathf.Clamp((int)((y_vector + 1.0f) * 0.5f * 255.0f), 0, 255);
+                        int b = Mathf.Clamp((int)((z_vector + 1.0f) * 0.5f * 255.0f), 0, 255);
+                        
+                        normalPixels[y * width + x] = new Color32((byte)r, (byte)g, (byte)b, 255);
+                    }
+                }
+                
+                normalMap.SetPixels32(normalPixels);
+                normalMap.Apply();
+                normalMap.name = diffuseTexture.name + "_n";
+                
+                return normalMap;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"TESLTextureLibrary: Error generating normal map: {ex.Message}");
+                return null;
+            }
+        }
+        
+        /// <summary>
+        /// Helper function to get brightness from a Color32 (grayscale value)
+        /// </summary>
+        private static float GetBrightness(Color32 color)
+        {
+            // Standard grayscale conversion: 0.299*R + 0.587*G + 0.114*B
+            return (0.299f * color.r + 0.587f * color.g + 0.114f * color.b) / 255.0f;
+        }
+        
+        /// <summary>
+        /// Gets or generates a normal map for a texture. First checks for existing _n suffix file,
+        /// then generates one from the diffuse texture if not found.
+        /// </summary>
+        /// <param name="textureEntry">The texture entry to get/generate normal map for</param>
+        /// <param name="strength">Strength of the normal map effect (default 1.0f)</param>
+        /// <returns>The normal map texture, or null if generation failed</returns>
+        public static Texture2D GetOrGenerateNormalMap(TextureEntry textureEntry, float strength = 1.0f)
+        {
+            if (textureEntry == null || textureEntry.Texture == null)
+                return null;
+            
+            // If normal map already cached, return it
+            if (textureEntry.NormalMap != null)
+                return textureEntry.NormalMap;
+            
+            // Check for existing normal map file with _n suffix
+            string basePath = textureEntry.Filename;
+            string baseName = System.IO.Path.GetFileNameWithoutExtension(basePath);
+            string directory = System.IO.Path.GetDirectoryName(basePath);
+            string extension = System.IO.Path.GetExtension(basePath);
+            
+            string normalMapPath = System.IO.Path.Combine(directory, baseName + "_n" + extension);
+            
+            if (System.IO.File.Exists(normalMapPath))
+            {
+                // Load existing normal map
+                try
+                {
+                    byte[] normalData = System.IO.File.ReadAllBytes(normalMapPath);
+                    Texture2D normalMap = new Texture2D(2, 2);
+                    if (normalMap.LoadImage(normalData))
+                    {
+                        normalMap.wrapMode = TextureWrapMode.Repeat;
+                        normalMap.filterMode = FilterMode.Bilinear;
+                        normalMap.anisoLevel = 9;
+                        #if UNITY_EDITOR
+                        normalMap.Apply(true, false);
+                        #else
+                        normalMap.Apply(false, false);
+                        #endif
+                        normalMap.name = baseName + "_n";
+                        textureEntry.NormalMap = normalMap;
+                        Debug.Log($"TESLTextureLibrary: Loaded existing normal map: {System.IO.Path.GetFileName(normalMapPath)}");
+                        return normalMap;
+                    }
+                    UnityEngine.Object.DestroyImmediate(normalMap);
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning($"TESLTextureLibrary: Error loading normal map from {normalMapPath}: {ex.Message}");
+                }
+            }
+            
+            // Generate normal map from diffuse texture
+            Texture2D generatedNormalMap = GenerateNormalMap(textureEntry.Texture, strength);
+            if (generatedNormalMap != null)
+            {
+                // Save the generated normal map to disk
+                try
+                {
+                    byte[] pngData = generatedNormalMap.EncodeToPNG();
+                    System.IO.File.WriteAllBytes(normalMapPath, pngData);
+                    Debug.Log($"TESLTextureLibrary: Generated and saved normal map: {System.IO.Path.GetFileName(normalMapPath)}");
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning($"TESLTextureLibrary: Error saving generated normal map: {ex.Message}");
+                }
+                
+                textureEntry.NormalMap = generatedNormalMap;
+                return generatedNormalMap;
             }
             
             return null;

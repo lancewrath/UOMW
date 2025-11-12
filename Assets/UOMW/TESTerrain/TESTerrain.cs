@@ -62,6 +62,9 @@ namespace ESMSharp.TES3Terrain
                 if (importer != null)
                 {
                     importer.alphaSource = TextureImporterAlphaSource.FromGrayScale;
+                    // Set texture format to ETC RGB compressed to prevent shininess
+                    importer.textureCompression = TextureImporterCompression.Compressed;
+                    importer.textureFormat = TextureImporterFormat.ETC_RGB4;
                     importer.SaveAndReimport();
                     AssetDatabase.Refresh();
                 }
@@ -956,6 +959,437 @@ namespace ESMSharp.TES3Terrain
             //UnityEngine.Debug.Log($"Texture extraction complete: {extractedCount} extracted, {failedCount} failed");
         }
 
+        /// <summary>
+        /// Finds water and foam textures.
+        /// Priority: 1) Textures folder, 2) BSA archives, 3) LTEX records
+        /// </summary>
+        private (Texture2D waterTexture, Texture2D waterNormalMap, Texture2D foamTexture) FindWaterTextures(Record[] _records, string esm = "Morrowind")
+        {
+            Texture2D waterTexture = null;
+            Texture2D waterNormalMap = null;
+            Texture2D foamTexture = null;
+            
+            string esmName = System.IO.Path.GetFileNameWithoutExtension(esm);
+            string textureDir = System.IO.Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Textures", esmName);
+            textureDir = System.IO.Path.GetFullPath(textureDir);
+            
+            // Common water texture names to search for
+            string[] waterNames = { "water00", "water", "water_00", "tx_water" };
+            string[] foamNames = { "foam", "foam00", "foam_00", "tx_foam" };
+            
+            // Priority 1: Search textures folder for water textures
+            if (waterTexture == null)
+            {
+                foreach (string waterName in waterNames)
+                {
+                    string[] extensions = { ".png", ".dds", ".tga" };
+                    foreach (string ext in extensions)
+                    {
+                        string testPath = System.IO.Path.Combine(textureDir, waterName + ext);
+                        if (System.IO.File.Exists(testPath))
+                        {
+                            // Check library first
+                            TESLTextureLibrary.TextureEntry cachedEntry = TESLTextureLibrary.GetTextureByPath(testPath);
+                            if (cachedEntry == null)
+                            {
+                                // Load using TESLTextureLibrary
+                                cachedEntry = TESLTextureLibrary.LoadOrGetTexture(
+                                    waterName,
+                                    textureDir,
+                                    esmName,
+                                    -1,
+                                    0,
+                                    ConvertDDSToPNG,
+                                    SetTextureImportSettings
+                                );
+                            }
+                            
+                            if (cachedEntry != null && cachedEntry.Texture != null)
+                            {
+                                waterTexture = cachedEntry.Texture;
+                                waterNormalMap = TESLTextureLibrary.GetOrGenerateNormalMap(cachedEntry, 1.0f);
+                                UnityEngine.Debug.Log($"Found water texture in textures folder: {waterName + ext}");
+                                break;
+                            }
+                        }
+                    }
+                    if (waterTexture != null) break;
+                }
+            }
+            
+            // Priority 1: Search textures folder for foam textures
+            if (foamTexture == null)
+            {
+                foreach (string foamName in foamNames)
+                {
+                    string[] extensions = { ".png", ".dds", ".tga" };
+                    foreach (string ext in extensions)
+                    {
+                        string testPath = System.IO.Path.Combine(textureDir, foamName + ext);
+                        if (System.IO.File.Exists(testPath))
+                        {
+                            // Check library first
+                            TESLTextureLibrary.TextureEntry cachedEntry = TESLTextureLibrary.GetTextureByPath(testPath);
+                            if (cachedEntry == null)
+                            {
+                                // Load using TESLTextureLibrary
+                                cachedEntry = TESLTextureLibrary.LoadOrGetTexture(
+                                    foamName,
+                                    textureDir,
+                                    esmName,
+                                    -1,
+                                    0,
+                                    ConvertDDSToPNG,
+                                    SetTextureImportSettings
+                                );
+                            }
+                            
+                            if (cachedEntry != null && cachedEntry.Texture != null)
+                            {
+                                foamTexture = cachedEntry.Texture;
+                                UnityEngine.Debug.Log($"Found foam texture in textures folder: {foamName + ext}");
+                                break;
+                            }
+                        }
+                    }
+                    if (foamTexture != null) break;
+                }
+            }
+            
+            // Priority 2: Try BSA extraction if not found in textures folder
+            if (waterTexture == null)
+            {
+                foreach (string waterName in waterNames)
+                {
+                    // Try to extract from BSA using TESLTextureLibrary
+                    TESLTextureLibrary.TextureEntry cachedEntry = TESLTextureLibrary.LoadOrGetTexture(
+                        waterName,
+                        textureDir,
+                        esmName,
+                        -1,
+                        0,
+                        ConvertDDSToPNG,
+                        SetTextureImportSettings
+                    );
+                    
+                    if (cachedEntry != null && cachedEntry.Texture != null)
+                    {
+                        waterTexture = cachedEntry.Texture;
+                        waterNormalMap = TESLTextureLibrary.GetOrGenerateNormalMap(cachedEntry, 1.0f);
+                        UnityEngine.Debug.Log($"Found water texture in BSA: {waterName}");
+                        break;
+                    }
+                }
+            }
+            
+            if (foamTexture == null)
+            {
+                foreach (string foamName in foamNames)
+                {
+                    // Try to extract from BSA using TESLTextureLibrary
+                    TESLTextureLibrary.TextureEntry cachedEntry = TESLTextureLibrary.LoadOrGetTexture(
+                        foamName,
+                        textureDir,
+                        esmName,
+                        -1,
+                        0,
+                        ConvertDDSToPNG,
+                        SetTextureImportSettings
+                    );
+                    
+                    if (cachedEntry != null && cachedEntry.Texture != null)
+                    {
+                        foamTexture = cachedEntry.Texture;
+                        UnityEngine.Debug.Log($"Found foam texture in BSA: {foamName}");
+                        break;
+                    }
+                }
+            }
+            
+            // Priority 3: Search for water texture in LTEX records (last resort)
+            foreach (Record rec in _records)
+            {
+                RecordLTex ltexRecord = rec as RecordLTex;
+                if (ltexRecord != null)
+                {
+                    string filename = null;
+                    string name = null;
+                    
+                    // Extract DATA (filename) and NAME (name) from subrecords
+                    foreach (SubRecords subrec in ltexRecord.subRecords)
+                    {
+                        SubRecordLTexData dataSubrec = subrec as SubRecordLTexData;
+                        if (dataSubrec != null)
+                        {
+                            filename = dataSubrec.filename;
+                            // Clean filename of null characters and illegal path characters
+                            if (!string.IsNullOrEmpty(filename))
+                            {
+                                filename = filename.TrimEnd('\0', ' ', '\t', '\r', '\n');
+                                filename = filename.Replace("\0", "");
+                                filename = filename.Trim();
+                            }
+                        }
+                        
+                        SubRecordLTexNAME nameSubrec = subrec as SubRecordLTexNAME;
+                        if (nameSubrec != null)
+                        {
+                            name = nameSubrec.name;
+                            if (!string.IsNullOrEmpty(name))
+                            {
+                                name = name.TrimEnd('\0', ' ', '\t', '\r', '\n');
+                                name = name.Replace("\0", "");
+                                name = name.Trim();
+                            }
+                        }
+                    }
+                    
+                    // Check if this is a water texture (case-insensitive search)
+                    bool isWater = false;
+                    bool isFoam = false;
+                    
+                    if (!string.IsNullOrEmpty(name))
+                    {
+                        string nameLower = name.ToLowerInvariant();
+                        isWater = nameLower.Contains("water");
+                        isFoam = nameLower.Contains("foam");
+                    }
+                    
+                    if (!isWater && !isFoam && !string.IsNullOrEmpty(filename))
+                    {
+                        try
+                        {
+                            // Clean filename before using Path methods
+                            string cleanFilename = filename;
+                            // Remove any illegal path characters
+                            char[] invalidChars = System.IO.Path.GetInvalidPathChars();
+                            foreach (char c in invalidChars)
+                            {
+                                cleanFilename = cleanFilename.Replace(c.ToString(), "");
+                            }
+                            
+                            if (!string.IsNullOrEmpty(cleanFilename))
+                            {
+                                string filenameLower = System.IO.Path.GetFileNameWithoutExtension(cleanFilename).ToLowerInvariant();
+                                isWater = filenameLower.Contains("water");
+                                isFoam = filenameLower.Contains("foam");
+                            }
+                        }
+                        catch (System.ArgumentException)
+                        {
+                            // If filename still has issues, try simple string operations
+                            string filenameLower = filename.ToLowerInvariant();
+                            isWater = filenameLower.Contains("water");
+                            isFoam = filenameLower.Contains("foam");
+                        }
+                    }
+                    
+                    // Load water texture
+                    if (isWater && waterTexture == null && !string.IsNullOrEmpty(filename))
+                    {
+                        // Try to load using TESLTextureLibrary
+                        // Safely get base name without extension, handling illegal characters
+                        string baseNameNoExt = filename;
+                        try
+                        {
+                            // Remove invalid path characters first
+                            char[] invalidChars = System.IO.Path.GetInvalidPathChars();
+                            foreach (char c in invalidChars)
+                            {
+                                baseNameNoExt = baseNameNoExt.Replace(c.ToString(), "");
+                            }
+                            baseNameNoExt = System.IO.Path.GetFileNameWithoutExtension(baseNameNoExt);
+                        }
+                        catch (System.ArgumentException)
+                        {
+                            // Fallback: manually extract filename without extension
+                            baseNameNoExt = filename;
+                            int lastSlash = baseNameNoExt.LastIndexOfAny(new char[] { '/', '\\' });
+                            if (lastSlash >= 0)
+                            {
+                                baseNameNoExt = baseNameNoExt.Substring(lastSlash + 1);
+                            }
+                            int lastDot = baseNameNoExt.LastIndexOf('.');
+                            if (lastDot >= 0)
+                            {
+                                baseNameNoExt = baseNameNoExt.Substring(0, lastDot);
+                            }
+                        }
+                        
+                        TESLTextureLibrary.TextureEntry cachedEntry = null;
+                        
+                        // First, check library by name
+                        if (!string.IsNullOrEmpty(name))
+                        {
+                            cachedEntry = TESLTextureLibrary.GetTextureByName(name);
+                        }
+                        
+                        // If not found by name, check by base filename
+                        if (cachedEntry == null)
+                        {
+                            cachedEntry = TESLTextureLibrary.GetTextureByName(baseNameNoExt);
+                        }
+                        
+                        // If still not found, try to find file and load it
+                        if (cachedEntry == null)
+                        {
+                            // Try to find file in texture directory
+                            string[] extensions = { ".png", ".dds", ".tga" };
+                            string foundPath = null;
+                            foreach (string ext in extensions)
+                            {
+                                string testPath = System.IO.Path.Combine(textureDir, baseNameNoExt + ext);
+                                if (System.IO.File.Exists(testPath))
+                                {
+                                    foundPath = testPath;
+                                    break;
+                                }
+                            }
+                            
+                            // Also check if file exists with original filename
+                            if (foundPath == null)
+                            {
+                                string originalPath = System.IO.Path.Combine(textureDir, filename);
+                                if (System.IO.File.Exists(originalPath))
+                                {
+                                    foundPath = originalPath;
+                                }
+                            }
+                            
+                            if (foundPath != null)
+                            {
+                                // Check library by path
+                                cachedEntry = TESLTextureLibrary.GetTextureByPath(foundPath);
+                                
+                                // If not in library, load it using TESLTextureLibrary (which will add it)
+                                if (cachedEntry == null)
+                                {
+                                    cachedEntry = TESLTextureLibrary.LoadOrGetTexture(
+                                        name ?? baseNameNoExt,  // textureName
+                                        textureDir,             // textureDir
+                                        esmName,                // esmName (already declared at function level)
+                                        -1,                     // ltexIndex
+                                        0,                      // vtexIndex
+                                        ConvertDDSToPNG,        // convertDDSToPNGFunc
+                                        SetTextureImportSettings // setTextureImportSettingsFunc
+                                    );
+                                }
+                            }
+                        }
+                        
+                        if (cachedEntry != null && cachedEntry.Texture != null)
+                        {
+                            waterTexture = cachedEntry.Texture;
+                            // Generate normal map for water (this will also cache it in the entry)
+                            waterNormalMap = TESLTextureLibrary.GetOrGenerateNormalMap(cachedEntry, 1.0f);
+                            UnityEngine.Debug.Log($"Found water texture: {name ?? filename} (cached in library)");
+                        }
+                    }
+                    
+                    // Load foam texture (optional)
+                    if (isFoam && foamTexture == null && !string.IsNullOrEmpty(filename))
+                    {
+                        // Safely get base name without extension, handling illegal characters
+                        string baseNameNoExt = filename;
+                        try
+                        {
+                            // Remove invalid path characters first
+                            char[] invalidChars = System.IO.Path.GetInvalidPathChars();
+                            foreach (char c in invalidChars)
+                            {
+                                baseNameNoExt = baseNameNoExt.Replace(c.ToString(), "");
+                            }
+                            baseNameNoExt = System.IO.Path.GetFileNameWithoutExtension(baseNameNoExt);
+                        }
+                        catch (System.ArgumentException)
+                        {
+                            // Fallback: manually extract filename without extension
+                            baseNameNoExt = filename;
+                            int lastSlash = baseNameNoExt.LastIndexOfAny(new char[] { '/', '\\' });
+                            if (lastSlash >= 0)
+                            {
+                                baseNameNoExt = baseNameNoExt.Substring(lastSlash + 1);
+                            }
+                            int lastDot = baseNameNoExt.LastIndexOf('.');
+                            if (lastDot >= 0)
+                            {
+                                baseNameNoExt = baseNameNoExt.Substring(0, lastDot);
+                            }
+                        }
+                        
+                        TESLTextureLibrary.TextureEntry cachedEntry = null;
+                        
+                        // First, check library by name
+                        if (!string.IsNullOrEmpty(name))
+                        {
+                            cachedEntry = TESLTextureLibrary.GetTextureByName(name);
+                        }
+                        
+                        // If not found by name, check by base filename
+                        if (cachedEntry == null)
+                        {
+                            cachedEntry = TESLTextureLibrary.GetTextureByName(baseNameNoExt);
+                        }
+                        
+                        // If still not found, try to find file and load it
+                        if (cachedEntry == null)
+                        {
+                            // Try to find file in texture directory
+                            string[] extensions = { ".png", ".dds", ".tga" };
+                            string foundPath = null;
+                            foreach (string ext in extensions)
+                            {
+                                string testPath = System.IO.Path.Combine(textureDir, baseNameNoExt + ext);
+                                if (System.IO.File.Exists(testPath))
+                                {
+                                    foundPath = testPath;
+                                    break;
+                                }
+                            }
+                            
+                            // Also check if file exists with original filename
+                            if (foundPath == null)
+                            {
+                                string originalPath = System.IO.Path.Combine(textureDir, filename);
+                                if (System.IO.File.Exists(originalPath))
+                                {
+                                    foundPath = originalPath;
+                                }
+                            }
+                            
+                            if (foundPath != null)
+                            {
+                                // Check library by path
+                                cachedEntry = TESLTextureLibrary.GetTextureByPath(foundPath);
+                                
+                                // If not in library, load it using TESLTextureLibrary (which will add it)
+                                if (cachedEntry == null)
+                                {
+                                    cachedEntry = TESLTextureLibrary.LoadOrGetTexture(
+                                        name ?? baseNameNoExt,  // textureName
+                                        textureDir,             // textureDir
+                                        esmName,                // esmName (already declared at function level)
+                                        -1,                     // ltexIndex
+                                        0,                      // vtexIndex
+                                        ConvertDDSToPNG,        // convertDDSToPNGFunc
+                                        SetTextureImportSettings // setTextureImportSettingsFunc
+                                    );
+                                }
+                            }
+                        }
+                        
+                        if (cachedEntry != null && cachedEntry.Texture != null)
+                        {
+                            foamTexture = cachedEntry.Texture;
+                            UnityEngine.Debug.Log($"Found foam texture: {name ?? filename} (cached in library)");
+                        }
+                    }
+                }
+            }
+            
+            return (waterTexture, waterNormalMap, foamTexture);
+        }
+        
         public void GenerateUnityTerrain(Record[] _records, string esm = "Morrowind", float terrainHeight = 0f, float waterY = 0f)
         {
             _esm = System.IO.Path.GetFileNameWithoutExtension(esm);
@@ -1331,8 +1765,27 @@ namespace ESMSharp.TES3Terrain
                 placeholder.name = name;
                 return placeholder;
             }
+            
+            // Create mask map texture to prevent shininess
+            // Mask map channels: R=Metallic, G=Ambient Occlusion, B=Height, A=Smoothness
+            // To remove shininess: R=0 (non-metallic), A=0 (rough/non-shiny)
+            Texture2D CreateBlackMaskTexture()
+            {
+                Texture2D maskTexture = new Texture2D(64, 64, TextureFormat.RGBA32, false);
+                Color32[] pixels = new Color32[64 * 64];
+                for (int i = 0; i < pixels.Length; i++)
+                {
+                    // R=0 (non-metallic), G=255 (full AO), B=0 (no height), A=0 (rough/non-shiny)
+                    pixels[i] = new Color32(0, 255, 0, 0);
+                }
+                maskTexture.SetPixels32(pixels);
+                maskTexture.Apply();
+                maskTexture.name = "NonShinyMask";
+                return maskTexture;
+            }
 
             Texture2D placeholderTexture = CreatePlaceholderTexture("Placeholder", new Color(0.5f, 0.5f, 0.5f, 1f)); // Gray placeholder
+            Texture2D blackMaskTexture = CreateBlackMaskTexture(); // Mask texture to prevent shininess
 
             // Step 6: Create TerrainLayers for each unique texture
             List<TerrainLayer> terrainLayers = new List<TerrainLayer>();
@@ -1378,8 +1831,8 @@ namespace ESMSharp.TES3Terrain
                         if (!names.primary.StartsWith("Tx_", StringComparison.OrdinalIgnoreCase) && 
                             !names.primary.StartsWith("tx_", StringComparison.OrdinalIgnoreCase))
                         {
-                            namesToTry.Add("Tx_" + names.primary);
-                            namesToTry.Add("tx_" + names.primary.ToLower());
+                        namesToTry.Add("Tx_" + names.primary);
+                        namesToTry.Add("tx_" + names.primary.ToLower());
                         }
                         // Try removing spaces (common in Morrowind texture names)
                         string primaryNoSpaces = names.primary.Replace(" ", "");
@@ -1692,7 +2145,7 @@ namespace ESMSharp.TES3Terrain
                                     
                                     // Add to global texture library
                                     string textureName = names.primary ?? names.fallback ?? foundBaseName ?? System.IO.Path.GetFileNameWithoutExtension(texturePath);
-                                    TESLTextureLibrary.AddTexture(textureName, ltexIndex, vtexIndex, texturePath, texture);
+                                    cachedEntry = TESLTextureLibrary.AddTexture(textureName, ltexIndex, vtexIndex, texturePath, texture);
                                 }
                                 #else
                                 // At runtime, DDS loading is more complex - use placeholder for now
@@ -1732,7 +2185,7 @@ namespace ESMSharp.TES3Terrain
                                     
                                     // Add to global texture library
                                     string textureName = names.primary ?? names.fallback ?? foundBaseName ?? System.IO.Path.GetFileNameWithoutExtension(texturePath);
-                                    TESLTextureLibrary.AddTexture(textureName, ltexIndex, vtexIndex, texturePath, texture);
+                                    cachedEntry = TESLTextureLibrary.AddTexture(textureName, ltexIndex, vtexIndex, texturePath, texture);
                                 }
                                 else
                                 {
@@ -1770,12 +2223,23 @@ namespace ESMSharp.TES3Terrain
                     // Create TerrainLayer (always create one, even if using placeholder)
                     TerrainLayer layer = new TerrainLayer();
                     layer.diffuseTexture = texture;
+                    layer.maskMapTexture = blackMaskTexture; // Black mask map to prevent shininess
                     layer.tileSize = new Vector2(8, 8); // Tiling size for better texture appearance
                     layer.tileOffset = Vector2.zero;
                     
                     // Set metallic and smoothness to reduce shininess (URP terrain shader uses these)
                     layer.metallic = 0.0f; // No metallic
                     layer.smoothness = 0.1f; // Low smoothness to reduce shininess
+                    
+                    // Get or generate normal map for this texture
+                    if (cachedEntry != null)
+                    {
+                        Texture2D normalMap = TESLTextureLibrary.GetOrGenerateNormalMap(cachedEntry);
+                        if (normalMap != null)
+                        {
+                            layer.normalMapTexture = normalMap;
+                        }
+                    }
                     
                     terrainLayers.Add(layer);
                     int assignedLayerIndex = terrainLayers.Count - 1;
@@ -1794,6 +2258,7 @@ namespace ESMSharp.TES3Terrain
                 UnityEngine.Debug.LogWarning("No terrain layers found, creating default placeholder layer.");
                 TerrainLayer defaultLayer = new TerrainLayer();
                 defaultLayer.diffuseTexture = placeholderTexture;
+                defaultLayer.maskMapTexture = blackMaskTexture; // Black mask map to prevent shininess
                 defaultLayer.tileSize = new Vector2(8, 8);
                 defaultLayer.tileOffset = Vector2.zero;
                 defaultLayer.metallic = 0.0f;
@@ -2049,8 +2514,15 @@ namespace ESMSharp.TES3Terrain
             
             Renderer waterRenderer = waterPlane.GetComponent<Renderer>();
             
-            // Try URP shaders first, fallback to Standard if URP not available
-            Shader waterShader = Shader.Find("Universal Render Pipeline/Lit");
+            // Find water and foam textures from LTEX records
+            var (waterTexture, waterNormalMap, foamTexture) = FindWaterTextures(_records, esm);
+            
+            // Try Lux URP/Water shader first, then fallback to other URP shaders
+            Shader waterShader = Shader.Find("Lux URP/Water");
+            if (waterShader == null)
+            {
+                waterShader = Shader.Find("Universal Render Pipeline/Lit");
+            }
             if (waterShader == null)
             {
                 waterShader = Shader.Find("Universal Render Pipeline/Simple Lit");
@@ -2067,15 +2539,106 @@ namespace ESMSharp.TES3Terrain
             
             Material waterMaterial = new Material(waterShader);
             
-            // Set up transparent water material
-            if (waterShader.name.Contains("Universal Render Pipeline"))
+            // Set up water material based on shader type
+            if (waterShader.name.Contains("Lux URP/Water"))
             {
-                // URP shader setup
+                // Lux URP/Water shader setup
+                // Surface Options
+                if (waterMaterial.HasProperty("_ZWrite"))
+                    waterMaterial.SetFloat("_ZWrite", 1.0f);
+                if (waterMaterial.HasProperty("_ZTest"))
+                    waterMaterial.SetFloat("_ZTest", 4.0f); // LessEqual
+                if (waterMaterial.HasProperty("_DstBlend"))
+                    waterMaterial.SetFloat("_DstBlend", 0.0f);
+                if (waterMaterial.HasProperty("_ReceiveShadows"))
+                    waterMaterial.SetFloat("_ReceiveShadows", 1.0f);
+                
+                // Surface Inputs - Normal Map
+                if (waterNormalMap != null && waterMaterial.HasProperty("_BumpMap"))
+                {
+                    waterMaterial.SetTexture("_BumpMap", waterNormalMap);
+                    if (waterMaterial.HasProperty("_BumpScale"))
+                        waterMaterial.SetFloat("_BumpScale", 1.0f);
+                }
+                
+                // Speed/Animation
+                if (waterMaterial.HasProperty("_Speed"))
+                    waterMaterial.SetVector("_Speed", new Vector4(0.1f, 0f, 0f, 0f));
+                if (waterMaterial.HasProperty("_SecondaryTilingSpeedRefractBump"))
+                    waterMaterial.SetVector("_SecondaryTilingSpeedRefractBump", new Vector4(2f, 2.3f, 0.1f, 1f));
+                
+                // Smoothness and Specular
+                if (waterMaterial.HasProperty("_Smoothness"))
+                    waterMaterial.SetFloat("_Smoothness", 0.824f);
+                if (waterMaterial.HasProperty("_SpecColor"))
+                    waterMaterial.SetColor("_SpecColor", new Color(0.2f, 0.2f, 0.2f, 1f));
+                if (waterMaterial.HasProperty("_EdgeBlend"))
+                    waterMaterial.SetFloat("_EdgeBlend", 1.74f);
+                
+                // Refraction
+                if (waterMaterial.HasProperty("_EnableRefraction"))
+                    waterMaterial.SetFloat("_EnableRefraction", 1.0f);
+                if (waterMaterial.HasProperty("_Refraction"))
+                    waterMaterial.SetFloat("_Refraction", 0.215f);
+                if (waterMaterial.HasProperty("_ReflectionBumpScale"))
+                    waterMaterial.SetFloat("_ReflectionBumpScale", 0.881f);
+                
+                // Underwater Fog
+                if (waterMaterial.HasProperty("_Color"))
+                    waterMaterial.SetColor("_Color", new Color(0.1932627f, 0.2954881f, 0.4056604f, 1f));
+                if (waterMaterial.HasProperty("_Density"))
+                    waterMaterial.SetFloat("_Density", 0.05f);
+                if (waterMaterial.HasProperty("_DiffuseNormalUp"))
+                    waterMaterial.SetFloat("_DiffuseNormalUp", 0.391f);
+                
+                // Foam
+                if (waterMaterial.HasProperty("_Foam"))
+                {
+                    waterMaterial.SetFloat("_Foam", 0.0f); // Disable foam
+                }
+                if (foamTexture != null && waterMaterial.HasProperty("_FoamMap"))
+                {
+                    waterMaterial.SetTexture("_FoamMap", foamTexture);
+                    if (waterMaterial.HasProperty("_FoamTiling"))
+                        waterMaterial.SetFloat("_FoamTiling", 2.0f);
+                    if (waterMaterial.HasProperty("_FoamSpeed"))
+                        waterMaterial.SetVector("_FoamSpeed", new Vector4(0.1f, 0f, 0f, 0f));
+                    if (waterMaterial.HasProperty("_FoamScale"))
+                        waterMaterial.SetFloat("_FoamScale", 4.0f);
+                    if (waterMaterial.HasProperty("_FoamSoftIntersectionFactor"))
+                        waterMaterial.SetFloat("_FoamSoftIntersectionFactor", 0.5f);
+                    if (waterMaterial.HasProperty("_FoamSlopStrength"))
+                        waterMaterial.SetFloat("_FoamSlopStrength", 0.85f);
+                    if (waterMaterial.HasProperty("_FoamSmoothness"))
+                        waterMaterial.SetFloat("_FoamSmoothness", 0.3f);
+                    if (waterMaterial.HasProperty("_AddFoamFromNormal"))
+                        waterMaterial.SetFloat("_AddFoamFromNormal", 4.0f);
+                }
+                
+                // Advanced
+                if (waterMaterial.HasProperty("_SpecularHighlights"))
+                    waterMaterial.SetFloat("_SpecularHighlights", 1.0f);
+                if (waterMaterial.HasProperty("_EnvironmentReflections"))
+                    waterMaterial.SetFloat("_EnvironmentReflections", 1.0f);
+                
+                UnityEngine.Debug.Log($"Applied Lux URP/Water shader with water texture: {(waterTexture != null ? "Yes" : "No")}, normal map: {(waterNormalMap != null ? "Yes" : "No")}, foam: {(foamTexture != null ? "Yes" : "No")}");
+            }
+            else if (waterShader.name.Contains("Universal Render Pipeline"))
+            {
+                // URP shader setup (fallback)
                 waterMaterial.SetFloat("_Surface", 1); // Transparent surface
                 waterMaterial.SetFloat("_Blend", 0); // Alpha blend
                 waterMaterial.SetColor("_BaseColor", new Color(0.2f, 0.4f, 0.8f, 0.6f));
                 waterMaterial.SetFloat("_Smoothness", 0.9f);
                 waterMaterial.SetFloat("_Metallic", 0f);
+                
+                // Apply normal map if available
+                if (waterNormalMap != null && waterMaterial.HasProperty("_BumpMap"))
+                {
+                    waterMaterial.SetTexture("_BumpMap", waterNormalMap);
+                    waterMaterial.EnableKeyword("_NORMALMAP");
+                }
+                
                 waterMaterial.renderQueue = 3000; // Transparent queue
             }
             else
@@ -2090,6 +2653,12 @@ namespace ESMSharp.TES3Terrain
                 waterMaterial.DisableKeyword("_ALPHAPREMULTIPLY_ON");
                 waterMaterial.renderQueue = 3000;
                 waterMaterial.color = new Color(0.2f, 0.4f, 0.8f, 0.6f);
+                
+                // Apply normal map if available
+                if (waterNormalMap != null && waterMaterial.HasProperty("_BumpMap"))
+                {
+                    waterMaterial.SetTexture("_BumpMap", waterNormalMap);
+                }
             }
             
             waterRenderer.material = waterMaterial;
@@ -2645,7 +3214,26 @@ namespace ESMSharp.TES3Terrain
                 return placeholder;
             }
             
+            // Create mask map texture to prevent shininess
+            // Mask map channels: R=Metallic, G=Ambient Occlusion, B=Height, A=Smoothness
+            // To remove shininess: R=0 (non-metallic), A=0 (rough/non-shiny)
+            Texture2D CreateBlackMaskTexture()
+            {
+                Texture2D maskTexture = new Texture2D(64, 64, TextureFormat.RGBA32, false);
+                Color32[] pixels = new Color32[64 * 64];
+                for (int i = 0; i < pixels.Length; i++)
+                {
+                    // R=0 (non-metallic), G=255 (full AO), B=0 (no height), A=0 (rough/non-shiny)
+                    pixels[i] = new Color32(0, 255, 0, 0);
+                }
+                maskTexture.SetPixels32(pixels);
+                maskTexture.Apply();
+                maskTexture.name = "NonShinyMask";
+                return maskTexture;
+            }
+            
             Texture2D placeholderTexture = CreatePlaceholderTexture("Placeholder", new Color(0.5f, 0.5f, 0.5f, 1f));
+            Texture2D blackMaskTexture = CreateBlackMaskTexture(); // Mask texture to prevent shininess
             
             List<ushort> sortedIndices = uniqueTextureIndices.OrderBy(x => x).ToList();
             
@@ -2893,7 +3481,12 @@ namespace ESMSharp.TES3Terrain
                                         
                                         // Add to global texture library
                                         string textureName = names.primary ?? names.fallback ?? foundBaseName ?? System.IO.Path.GetFileNameWithoutExtension(texturePath);
-                                        TESLTextureLibrary.AddTexture(textureName, ltexIndex, vtexIndex, texturePath, texture);
+                                        TESLTextureLibrary.TextureEntry addedEntry = TESLTextureLibrary.AddTexture(textureName, ltexIndex, vtexIndex, texturePath, texture);
+                                        // Store entry for normal map generation
+                                        if (addedEntry != null)
+                                        {
+                                            cachedEntry = addedEntry;
+                                        }
                                     }
                                     else
                                     {
@@ -2921,10 +3514,31 @@ namespace ESMSharp.TES3Terrain
                     
                     TerrainLayer layer = new TerrainLayer();
                     layer.diffuseTexture = texture;
+                    layer.maskMapTexture = blackMaskTexture; // Black mask map to prevent shininess
                     layer.tileSize = new Vector2(8, 8);
                     layer.tileOffset = Vector2.zero;
                     layer.metallic = 0.0f;
                     layer.smoothness = 0.1f;
+                    
+                    // Get or generate normal map for this texture
+                    // Find the texture entry in the library
+                    TESLTextureLibrary.TextureEntry textureEntry = null;
+                    if (texturePath != null)
+                    {
+                        textureEntry = TESLTextureLibrary.GetTextureByPath(texturePath);
+                    }
+                    if (textureEntry == null && vtexIndex > 0)
+                    {
+                        textureEntry = TESLTextureLibrary.GetTextureByVTEXIndex(vtexIndex);
+                    }
+                    if (textureEntry != null)
+                    {
+                        Texture2D normalMap = TESLTextureLibrary.GetOrGenerateNormalMap(textureEntry);
+                        if (normalMap != null)
+                        {
+                            layer.normalMapTexture = normalMap;
+                        }
+                    }
                     
                     _sharedTerrainLayers.Add(layer);
                     int assignedLayerIndex = _sharedTerrainLayers.Count - 1;
@@ -2937,6 +3551,7 @@ namespace ESMSharp.TES3Terrain
                 UnityEngine.Debug.LogWarning("No terrain layers found, creating default placeholder layer.");
                 TerrainLayer defaultLayer = new TerrainLayer();
                 defaultLayer.diffuseTexture = placeholderTexture;
+                defaultLayer.maskMapTexture = blackMaskTexture; // Black mask map to prevent shininess
                 defaultLayer.tileSize = new Vector2(8, 8);
                 defaultLayer.tileOffset = Vector2.zero;
                 defaultLayer.metallic = 0.0f;

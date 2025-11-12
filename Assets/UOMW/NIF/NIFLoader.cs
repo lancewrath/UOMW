@@ -271,7 +271,7 @@ namespace ESMSharp.NIF
                 if (baseTex.Enabled && !string.IsNullOrEmpty(baseTex.FilePath))
                 {
                     //UnityEngine.Debug.Log($"Loading texture for material: {baseTex.FilePath}");
-                    Texture2D diffuseTexture = LoadTextureForModel(baseTex.FilePath, esm);
+                    var (diffuseTexture, textureEntry) = LoadTextureForModelWithEntry(baseTex.FilePath, esm);
                     if (diffuseTexture != null)
                     {
                         //UnityEngine.Debug.Log($"Successfully loaded texture: {baseTex.FilePath} ({diffuseTexture.width}x{diffuseTexture.height})");
@@ -288,6 +288,26 @@ namespace ESMSharp.NIF
                         {
                             material.SetTexture("_MainTex", diffuseTexture);
                         }
+                        
+                        // Get or generate normal map for this texture
+                        if (textureEntry != null)
+                        {
+                            Texture2D normalMap = TESLTextureLibrary.GetOrGenerateNormalMap(textureEntry);
+                            if (normalMap != null)
+                            {
+                                // Apply normal map to material
+                                if (material.shader.name.Contains("Universal Render Pipeline"))
+                                {
+                                    material.SetTexture("_BumpMap", normalMap);
+                                    material.EnableKeyword("_NORMALMAP");
+                                }
+                                else
+                                {
+                                    material.SetTexture("_BumpMap", normalMap);
+                                }
+                            }
+                        }
+                        
                         textureLoaded = true;
                     }
                     else
@@ -412,11 +432,12 @@ namespace ESMSharp.NIF
 
         /// <summary>
         /// Loads a texture for a NIF model, checking cache first, then extracting from BSA if needed
+        /// Returns the texture and the texture entry (for normal map generation)
         /// </summary>
-        private Texture2D LoadTextureForModel(string texturePath, string esm = "Morrowind")
+        private (Texture2D texture, TESLTextureLibrary.TextureEntry entry) LoadTextureForModelWithEntry(string texturePath, string esm = "Morrowind")
         {
             if (string.IsNullOrEmpty(texturePath))
-                return null;
+                return (null, null);
 
             // Clean the texture path
             texturePath = texturePath.TrimEnd('\0', ' ', '\t', '\r', '\n');
@@ -458,7 +479,7 @@ namespace ESMSharp.NIF
                 TESLTextureLibrary.TextureEntry cachedEntry = TESLTextureLibrary.GetTextureByPath(foundTexturePath);
                 if (cachedEntry != null)
                 {
-                    return cachedEntry.Texture;
+                    return (cachedEntry.Texture, cachedEntry);
                 }
                 
                 // Load from file and add to library
@@ -466,13 +487,27 @@ namespace ESMSharp.NIF
                 if (texture != null)
                 {
                     // Add to global texture library (no LTEX/VTEX index for model textures)
-                    TESLTextureLibrary.AddTexture(baseNameNoExt, -1, 0, foundTexturePath, texture);
+                    cachedEntry = TESLTextureLibrary.AddTexture(baseNameNoExt, -1, 0, foundTexturePath, texture);
+                    // Generate normal map for this texture
+                    if (cachedEntry != null)
+                    {
+                        TESLTextureLibrary.GetOrGenerateNormalMap(cachedEntry);
+                    }
                 }
-                return texture;
+                return (texture, cachedEntry);
             }
 
             //UnityEngine.Debug.LogWarning($"Texture not found: {texturePath}");
-            return null;
+            return (null, null);
+        }
+        
+        /// <summary>
+        /// Loads a texture for a NIF model, checking cache first, then extracting from BSA if needed
+        /// </summary>
+        private Texture2D LoadTextureForModel(string texturePath, string esm = "Morrowind")
+        {
+            var (texture, entry) = LoadTextureForModelWithEntry(texturePath, esm);
+            return texture;
         }
 
         /// <summary>

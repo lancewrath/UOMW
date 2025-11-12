@@ -931,9 +931,11 @@ namespace ESMSharp.TES3Terrain
                     instanceObj.transform.rotation = Quaternion.Euler(instanceEuler.x, -instanceYaw, instanceEuler.z);
                     
                     // Ensure MeshCollider is a trigger (for interaction, doesn't block movement)
+                    // Note: Triggers require convex MeshColliders
                     MeshCollider instanceMeshCollider = instanceObj.GetComponent<MeshCollider>();
                     if (instanceMeshCollider != null)
                     {
+                        instanceMeshCollider.convex = true; // Must be convex for triggers
                         instanceMeshCollider.isTrigger = true;
                     }
                     else
@@ -944,7 +946,7 @@ namespace ESMSharp.TES3Terrain
                         {
                             instanceMeshCollider = instanceObj.AddComponent<MeshCollider>();
                             instanceMeshCollider.sharedMesh = meshFilter.sharedMesh;
-                            instanceMeshCollider.convex = false;
+                            instanceMeshCollider.convex = true; // Must be convex for triggers
                             instanceMeshCollider.isTrigger = true;
                         }
                     }
@@ -1029,9 +1031,11 @@ namespace ESMSharp.TES3Terrain
                 grassModel.transform.rotation = Quaternion.Euler(euler.x, -yaw, euler.z);
                 
                 // Ensure MeshCollider is a trigger (for interaction, doesn't block movement)
+                // Note: Triggers require convex MeshColliders
                 MeshCollider meshCollider = grassModel.GetComponent<MeshCollider>();
                 if (meshCollider != null)
                 {
+                    meshCollider.convex = true; // Must be convex for triggers
                     meshCollider.isTrigger = true;
                 }
                 else
@@ -1042,7 +1046,7 @@ namespace ESMSharp.TES3Terrain
                     {
                         meshCollider = grassModel.AddComponent<MeshCollider>();
                         meshCollider.sharedMesh = meshFilter.sharedMesh;
-                        meshCollider.convex = false;
+                        meshCollider.convex = true; // Must be convex for triggers
                         meshCollider.isTrigger = true;
                     }
                 }
