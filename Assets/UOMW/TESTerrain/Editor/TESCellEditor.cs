@@ -20,8 +20,7 @@ namespace ESMSharp.TES3Terrain.Editor
                 
                 if (GUILayout.Button("Generate Cell Statics"))
                 {
-                    tescell.GenerateStatics();
-
+                    tescell.StartCoroutine(tescell.GenerateStatics());
                 }
             } else
             {

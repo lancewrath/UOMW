@@ -57,5 +57,12 @@ namespace ESMSharp.TES3
         /// Actually, models loaded from NIF are already in their native scale, so we use 1.0
         /// </summary>
         public const float MORROWIND_TO_CHARACTER_SCALE = 1f; // Models are already at correct scale when loaded
+        
+        /// <summary>
+        /// Enable multithreaded model loading for cells
+        /// When enabled, NIF files are parsed on background threads and GameObjects are created on main thread
+        /// Set to false for debugging model loading issues
+        /// </summary>
+        public static bool EnableMultithreadedModelLoading { get; set; } = true;
     }
 }

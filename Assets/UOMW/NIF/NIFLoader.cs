@@ -21,6 +21,11 @@ namespace ESMSharp.NIF
         private string _esm = "";
         private string _bsa = "";
         private BSA _bsaArchive = null;
+        
+        /// <summary>
+        /// Gets the ESM name (for async loading access)
+        /// </summary>
+        public string ESMName { get { return _esm; } }
 
         public NIFLoader(string esm = "Morrowind", string bsa = "Morrowind.bsa")
         {
@@ -263,7 +268,7 @@ namespace ESMSharp.NIF
         /// <summary>
         /// Loads a NIF file from byte array
         /// </summary>
-        private GameObject LoadNIFFromBytes(byte[] nifData, string filename, bool combineMeshes = false)
+        internal GameObject LoadNIFFromBytes(byte[] nifData, string filename, bool combineMeshes = false)
         {
             // Use niflib.net (primary loader)
             // No fallback - if niflib.net fails, we want to see the error and fix it

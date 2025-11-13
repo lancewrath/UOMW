@@ -3,9 +3,11 @@ using ESMSharp.TES3.Records;
 using ESMSharp.NIF;
 using BSASharp;
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using UnityEngine;
 
 namespace ESMSharp.TES3Terrain
@@ -22,6 +24,12 @@ namespace ESMSharp.TES3Terrain
         private Dictionary<string, TreePrototype> _treePrototypes = new Dictionary<string, TreePrototype>(StringComparer.OrdinalIgnoreCase);
         private List<TreeInstance> _treeInstances = new List<TreeInstance>();
         private BSA _bsaArchive = null;
+        
+        /// <summary>
+        /// Queue of pending async model loads for this PlaceStatics instance
+        /// Used when multithreading is enabled
+        /// </summary>
+        private Queue<System.Action> _pendingAsyncLoads = new Queue<System.Action>();
 
         // Distance-based LOD configuration (based on MWGE distant lands algorithm)
         // These values determine which quadtree/distance category objects are placed in
@@ -225,14 +233,64 @@ namespace ESMSharp.TES3Terrain
         }
 
         /// <summary>
+        /// Helper MonoBehaviour for running PlaceStatics coroutines
+        /// </summary>
+        private class PlaceStaticsCoroutineHelper : MonoBehaviour 
+        {
+            public static PlaceStaticsCoroutineHelper Instance { get; private set; }
+            
+            void Awake()
+            {
+                Instance = this;
+            }
+            
+            void OnDestroy()
+            {
+                if (Instance == this)
+                    Instance = null;
+            }
+        }
+
+        /// <summary>
         /// Places statics for a single cell only (for manual testing)
+        /// Synchronous version - calls coroutine version internally
         /// </summary>
         public void PlaceCellStatics(RecordCell cellRecord, Record[] allRecords, CellManager cellManager, Transform parent, Terrain terrain)
+        {
+            // For synchronous calls, we need a MonoBehaviour to run the coroutine
+            // Create a temporary helper object
+            GameObject helperObj = new GameObject("PlaceStaticsHelper");
+            PlaceStaticsCoroutineHelper helper = helperObj.AddComponent<PlaceStaticsCoroutineHelper>();
+            helper.StartCoroutine(PlaceCellStaticsCoroutine(cellRecord, allRecords, cellManager, parent, terrain, () =>
+            {
+                GameObject.Destroy(helperObj);
+            }));
+        }
+
+        /// <summary>
+        /// Wrapper class for placement counts (needed because coroutines can't have ref parameters)
+        /// </summary>
+        private class PlacementCounts
+        {
+            public int PlacedTrees { get; set; }
+            public int FailedTrees { get; set; }
+            public int PlacedGrass { get; set; }
+            public int FailedGrass { get; set; }
+            public int PlacedStructures { get; set; }
+            public int FailedStructures { get; set; }
+            public int PlacedNPCs { get; set; }
+            public int FailedNPCs { get; set; }
+        }
+
+        /// <summary>
+        /// Coroutine version of PlaceCellStatics for async model loading
+        /// </summary>
+        public IEnumerator PlaceCellStaticsCoroutine(RecordCell cellRecord, Record[] allRecords, CellManager cellManager, Transform parent, Terrain terrain, System.Action onComplete = null)
         {
             if (cellRecord == null || cellRecord.subRecords == null)
             {
                 //UnityEngine.Debug.LogWarning("TESCell: Cannot generate statics - cell record is null or has no subrecords");
-                return;
+                yield break;
             }
 
             // Skip interior cells
@@ -257,7 +315,7 @@ namespace ESMSharp.TES3Terrain
             if (isInterior || (cellName != null && cellName.IndexOf("interior", StringComparison.OrdinalIgnoreCase) >= 0))
             {
                 //UnityEngine.Debug.Log($"TESCell: Skipping interior cell at ({cellGridX}, {cellGridY})");
-                return;
+                yield break;
             }
 
             // Build STAT records dictionary from all records (needed for model lookup)
@@ -307,14 +365,7 @@ namespace ESMSharp.TES3Terrain
             float currentScale = 1.0f;
             bool seenFirstDATA = false;
 
-            int placedTreesCount = 0;
-            int failedTreesCount = 0;
-            int placedGrassCount = 0;
-            int failedGrassCount = 0;
-            int placedStructuresCount = 0;
-            int failedStructuresCount = 0;
-            int placedNPCsCount = 0;
-            int failedNPCsCount = 0;
+            PlacementCounts counts = new PlacementCounts();
 
             foreach (SubRecords subrec in cellRecord.subRecords)
             {
@@ -341,8 +392,8 @@ namespace ESMSharp.TES3Terrain
                             cleanedANAM = new string(cleanedANAM.Where(c => c != '\0').ToArray()).Trim();
                             if (!string.IsNullOrEmpty(cleanedANAM))
                             {
-                                // Place NPC
-                                PlaceNPC(cleanedANAM, currentREFP, currentScale, cellParent, cellGridX, cellGridY, ref placedNPCsCount, ref failedNPCsCount);
+                                // Place NPC (yield for async loading)
+                                yield return PlaceNPCCoroutine(cleanedANAM, currentREFP, currentScale, cellParent, cellGridX, cellGridY, counts);
                                 placedAsNPC = true;
                             }
                         }
@@ -362,7 +413,7 @@ namespace ESMSharp.TES3Terrain
                                     {
                                         // This is an NPC but ANAM wasn't detected - log and place as NPC anyway
                                         UnityEngine.Debug.LogWarning($"PlaceCellStatics: NPC '{objectIdClean}' detected by Object ID but ANAM was missing. Placing as NPC anyway.");
-                                        PlaceNPC(objectIdClean, currentREFP, currentScale, cellParent, cellGridX, cellGridY, ref placedNPCsCount, ref failedNPCsCount);
+                                        yield return PlaceNPCCoroutine(objectIdClean, currentREFP, currentScale, cellParent, cellGridX, cellGridY, counts);
                                         placedAsNPC = true;
                                     }
                                 }
@@ -372,14 +423,14 @@ namespace ESMSharp.TES3Terrain
                         // If still not placed as NPC, place as static objects
                         if (!placedAsNPC)
                         {
-                            // Place trees
-                            PlaceReference(currentObjectID, currentREFP, currentScale, statRecordsByName, cellParent, cellGridX, cellGridY, ObjectType.Trees, terrain, parent, ref placedTreesCount, ref failedTreesCount, allRecords);
+                            // Place trees (yield for async loading)
+                            yield return PlaceReferenceCoroutine(currentObjectID, currentREFP, currentScale, statRecordsByName, cellParent, cellGridX, cellGridY, ObjectType.Trees, terrain, parent, counts, allRecords);
                             
-                            // Place grass
-                            PlaceReference(currentObjectID, currentREFP, currentScale, statRecordsByName, cellParent, cellGridX, cellGridY, ObjectType.Grass, terrain, parent, ref placedGrassCount, ref failedGrassCount, allRecords);
+                            // Place grass (yield for async loading)
+                            yield return PlaceReferenceCoroutine(currentObjectID, currentREFP, currentScale, statRecordsByName, cellParent, cellGridX, cellGridY, ObjectType.Grass, terrain, parent, counts, allRecords);
                             
-                            // Place large structures
-                            PlaceReference(currentObjectID, currentREFP, currentScale, statRecordsByName, cellParent, cellGridX, cellGridY, ObjectType.LargeStructures, terrain, parent, ref placedStructuresCount, ref failedStructuresCount, allRecords);
+                            // Place large structures (yield for async loading)
+                            yield return PlaceReferenceCoroutine(currentObjectID, currentREFP, currentScale, statRecordsByName, cellParent, cellGridX, cellGridY, ObjectType.LargeStructures, terrain, parent, counts, allRecords);
                         }
                     }
                     currentFRMR = subrec as SubRecordCellFRMR;
@@ -442,8 +493,8 @@ namespace ESMSharp.TES3Terrain
                     cleanedANAM = new string(cleanedANAM.Where(c => c != '\0').ToArray()).Trim();
                     if (!string.IsNullOrEmpty(cleanedANAM))
                     {
-                        // Place NPC
-                        PlaceNPC(cleanedANAM, currentREFP, currentScale, cellParent, cellGridX, cellGridY, ref placedNPCsCount, ref failedNPCsCount);
+                        // Place NPC (yield for async loading)
+                        yield return PlaceNPCCoroutine(cleanedANAM, currentREFP, currentScale, cellParent, cellGridX, cellGridY, counts);
                         placedAsNPC = true;
                     }
                 }
@@ -463,7 +514,7 @@ namespace ESMSharp.TES3Terrain
                             {
                                 // This is an NPC but ANAM wasn't detected - log and place as NPC anyway
                                 UnityEngine.Debug.LogWarning($"PlaceCellStatics: NPC '{objectIdClean}' detected by Object ID but ANAM was missing. Placing as NPC anyway.");
-                                PlaceNPC(objectIdClean, currentREFP, currentScale, cellParent, cellGridX, cellGridY, ref placedNPCsCount, ref failedNPCsCount);
+                                yield return PlaceNPCCoroutine(objectIdClean, currentREFP, currentScale, cellParent, cellGridX, cellGridY, counts);
                                 placedAsNPC = true;
                             }
                         }
@@ -473,18 +524,20 @@ namespace ESMSharp.TES3Terrain
                 // If still not placed as NPC, place as static objects
                 if (!placedAsNPC)
                 {
-                    // Place trees
-                    PlaceReference(currentObjectID, currentREFP, currentScale, statRecordsByName, cellParent, cellGridX, cellGridY, ObjectType.Trees, terrain, parent, ref placedTreesCount, ref failedTreesCount, allRecords);
+                    // Place trees (yield for async loading)
+                    yield return PlaceReferenceCoroutine(currentObjectID, currentREFP, currentScale, statRecordsByName, cellParent, cellGridX, cellGridY, ObjectType.Trees, terrain, parent, counts, allRecords);
                     
-                    // Place grass
-                    PlaceReference(currentObjectID, currentREFP, currentScale, statRecordsByName, cellParent, cellGridX, cellGridY, ObjectType.Grass, terrain, parent, ref placedGrassCount, ref failedGrassCount, allRecords);
+                    // Place grass (yield for async loading)
+                    yield return PlaceReferenceCoroutine(currentObjectID, currentREFP, currentScale, statRecordsByName, cellParent, cellGridX, cellGridY, ObjectType.Grass, terrain, parent, counts, allRecords);
                     
-                    // Place large structures
-                    PlaceReference(currentObjectID, currentREFP, currentScale, statRecordsByName, cellParent, cellGridX, cellGridY, ObjectType.LargeStructures, terrain, parent, ref placedStructuresCount, ref failedStructuresCount, allRecords);
+                    // Place large structures (yield for async loading)
+                    yield return PlaceReferenceCoroutine(currentObjectID, currentREFP, currentScale, statRecordsByName, cellParent, cellGridX, cellGridY, ObjectType.LargeStructures, terrain, parent, counts, allRecords);
                 }
             }
+            
+            onComplete?.Invoke();
 
-            //UnityEngine.Debug.Log($"TESCell ({cellGridX}, {cellGridY}): Placed {placedTreesCount} trees ({failedTreesCount} failed), {placedGrassCount} grass ({failedGrassCount} failed), {placedStructuresCount} structures ({failedStructuresCount} failed)");
+            //UnityEngine.Debug.Log($"TESCell ({cellGridX}, {cellGridY}): Placed {counts.PlacedTrees} trees ({counts.FailedTrees} failed), {counts.PlacedGrass} grass ({counts.FailedGrass} failed), {counts.PlacedStructures} structures ({counts.FailedStructures} failed)");
             
             // Apply tree instances to terrain if any were placed
             if (terrain != null && terrain.terrainData != null && _treeInstances.Count > 0)
@@ -820,7 +873,7 @@ namespace ESMSharp.TES3Terrain
                 }
                 
                 // Load the NIF model with meshes combined (for trees)
-                GameObject treeModel = _nifLoader.LoadNIFFromCache(baseFilename, combineMeshes: true);
+                GameObject treeModel = LoadNIFModel(baseFilename, combineMeshes: true);
                 if (treeModel == null)
                 {
                     //UnityEngine.Debug.LogWarning($"Failed to load tree model: {baseFilename}");
@@ -902,6 +955,381 @@ namespace ESMSharp.TES3Terrain
                 UnityEngine.Debug.LogError($"Error placing tree {modelFilename}: {ex.Message}\n{ex.StackTrace}");
                 return false;
             }
+        }
+
+        /// <summary>
+        /// Coroutine version of PlaceTree that uses async model loading
+        /// </summary>
+        private IEnumerator PlaceTreeCoroutine(string modelFilename, SubRecordCellREFP refp, float scale, SubRecordCellObjectID objectId, Terrain terrain, int cellGridX, int cellGridY, Transform parent, System.Action<bool> onComplete)
+        {
+            bool result = false;
+            string baseFilename = Path.GetFileName(modelFilename);
+            string baseFilenameNoExt = Path.GetFileNameWithoutExtension(baseFilename);
+            
+            try
+            {
+                // Check cache first
+                TESNifLibrary.NifEntry cachedEntry = TESNifLibrary.GetModelByBaseFilename(baseFilenameNoExt);
+                if (cachedEntry != null)
+                {
+                    GameObject instanceObj = GameObject.Instantiate(cachedEntry.Model);
+                    instanceObj.name = cachedEntry.Model.name;
+                    
+                    float instanceScaledX = refp.x * TESGlobals.MORROWIND_TO_STATIC_SCALE;
+                    float instanceScaledZ = refp.y * TESGlobals.MORROWIND_TO_STATIC_SCALE;
+                    float instanceScaledY = refp.z * TESGlobals.MORROWIND_TO_STATIC_SCALE;
+                    
+                    Vector3 instancePosition = new Vector3(instanceScaledX, instanceScaledY, instanceScaledZ);
+                    Quaternion instanceRotation = Quaternion.Euler(-refp.yaw * Mathf.Rad2Deg, -refp.pitch * Mathf.Rad2Deg, -refp.roll * Mathf.Rad2Deg);
+                    
+                    instanceObj.transform.position = instancePosition;
+                    instanceObj.transform.rotation = instanceRotation;
+                    
+                    Vector3 instanceBaseScale = new Vector3(TESGlobals.MORROWIND_TO_STATIC_SCALE, TESGlobals.MORROWIND_TO_STATIC_SCALE, TESGlobals.MORROWIND_TO_STATIC_SCALE);
+                    instanceObj.transform.localScale = instanceBaseScale * (scale < 0 ? Mathf.Abs(scale) : scale);
+                    
+                    if (objectId != null && !string.IsNullOrEmpty(objectId.objectId))
+                        instanceObj.name = objectId.objectId.TrimEnd('\0');
+                    
+                    Vector3 currentScaleLocal = instanceObj.transform.localScale;
+                    instanceObj.transform.localScale = new Vector3(currentScaleLocal.x, currentScaleLocal.y, -currentScaleLocal.z);
+                    
+                    Vector3 euler = instanceObj.transform.rotation.eulerAngles;
+                    float yaw = euler.y;
+                    if (yaw > 180f) yaw -= 360f;
+                    instanceObj.transform.rotation = Quaternion.Euler(euler.x, -yaw, euler.z);
+                    
+                    AddLODToObject(instanceObj);
+                    if (parent != null)
+                        instanceObj.transform.SetParent(parent, worldPositionStays: true);
+                    
+                    result = true;
+                    onComplete?.Invoke(result);
+                    yield break;
+                }
+            }
+            catch (Exception ex)
+            {
+                UnityEngine.Debug.LogError($"Error placing tree {modelFilename}: {ex.Message}\n{ex.StackTrace}");
+                result = false;
+                onComplete?.Invoke(result);
+                yield break;
+            }
+            
+            // Load model asynchronously
+            GameObject treeModel = null;
+            yield return LoadNIFModelCoroutine(baseFilename, true, (loadedModel) => treeModel = loadedModel);
+            
+            if (treeModel == null)
+            {
+                onComplete?.Invoke(false);
+                yield break;
+            }
+            
+            try
+            {
+                string staticId = objectId?.objectId?.TrimEnd('\0');
+                string staticName = staticId;
+                TESNifLibrary.AddModel(staticId, staticName, baseFilename, baseFilenameNoExt, treeModel, combineMeshes: true);
+                
+                float scaledX = refp.x * TESGlobals.MORROWIND_TO_STATIC_SCALE;
+                float scaledZ = refp.y * TESGlobals.MORROWIND_TO_STATIC_SCALE;
+                float scaledY = refp.z * TESGlobals.MORROWIND_TO_STATIC_SCALE;
+                
+                Vector3 unityPosition = new Vector3(scaledX, scaledY, scaledZ);
+                Quaternion unityRotation = Quaternion.Euler(-refp.yaw * Mathf.Rad2Deg, -refp.pitch * Mathf.Rad2Deg, -refp.roll * Mathf.Rad2Deg);
+                
+                treeModel.transform.position = unityPosition;
+                treeModel.transform.rotation = unityRotation;
+                
+                Vector3 modelBaseScale = treeModel.transform.localScale;
+                treeModel.transform.localScale = modelBaseScale * (scale < 0 ? Mathf.Abs(scale) : scale);
+                
+                if (objectId != null && !string.IsNullOrEmpty(objectId.objectId))
+                    treeModel.name = objectId.objectId.TrimEnd('\0');
+                
+                Vector3 currentScaleLocal2 = treeModel.transform.localScale;
+                treeModel.transform.localScale = new Vector3(currentScaleLocal2.x, currentScaleLocal2.y, -currentScaleLocal2.z);
+                
+                Vector3 euler2 = treeModel.transform.rotation.eulerAngles;
+                float yaw2 = euler2.y;
+                if (yaw2 > 180f) yaw2 -= 360f;
+                treeModel.transform.rotation = Quaternion.Euler(euler2.x, -yaw2, euler2.z);
+                
+                AddLODToObject(treeModel);
+                if (parent != null)
+                    treeModel.transform.SetParent(parent, worldPositionStays: true);
+                
+                result = true;
+            }
+            catch (Exception ex)
+            {
+                UnityEngine.Debug.LogError($"Error placing tree {modelFilename}: {ex.Message}\n{ex.StackTrace}");
+                result = false;
+            }
+            
+            onComplete?.Invoke(result);
+        }
+
+        /// <summary>
+        /// Coroutine version of PlaceGrassDetail that uses async model loading
+        /// </summary>
+        private IEnumerator PlaceGrassDetailCoroutine(string modelFilename, SubRecordCellREFP refp, float scale, SubRecordCellObjectID objectId, Terrain terrain, int cellGridX, int cellGridY, Transform parent, System.Action<bool> onComplete)
+        {
+            bool result = false;
+            string baseFilename = Path.GetFileName(modelFilename);
+            string baseFilenameNoExt = Path.GetFileNameWithoutExtension(baseFilename);
+            
+            try
+            {
+                TESNifLibrary.NifEntry cachedEntry = TESNifLibrary.GetModelByBaseFilename(baseFilenameNoExt);
+                if (cachedEntry != null)
+                {
+                    GameObject instanceObj = GameObject.Instantiate(cachedEntry.Model);
+                    instanceObj.name = cachedEntry.Model.name;
+                    
+                    float instanceScaledX = refp.x * TESGlobals.MORROWIND_TO_STATIC_SCALE;
+                    float instanceScaledZ = refp.y * TESGlobals.MORROWIND_TO_STATIC_SCALE;
+                    float instanceScaledY = refp.z * TESGlobals.MORROWIND_TO_STATIC_SCALE;
+                    
+                    Vector3 instancePosition = new Vector3(instanceScaledX, instanceScaledY, instanceScaledZ);
+                    Quaternion instanceRotation = Quaternion.Euler(-refp.yaw * Mathf.Rad2Deg, -refp.pitch * Mathf.Rad2Deg, -refp.roll * Mathf.Rad2Deg);
+                    
+                    instanceObj.transform.position = instancePosition;
+                    instanceObj.transform.rotation = instanceRotation;
+                    
+                    Vector3 instanceBaseScale = new Vector3(TESGlobals.MORROWIND_TO_STATIC_SCALE, TESGlobals.MORROWIND_TO_STATIC_SCALE, TESGlobals.MORROWIND_TO_STATIC_SCALE);
+                    instanceObj.transform.localScale = instanceBaseScale * (scale < 0 ? Mathf.Abs(scale) : scale);
+                    
+                    if (objectId != null && !string.IsNullOrEmpty(objectId.objectId))
+                        instanceObj.name = objectId.objectId.TrimEnd('\0');
+                    
+                    Vector3 currentScaleLocal = instanceObj.transform.localScale;
+                    instanceObj.transform.localScale = new Vector3(currentScaleLocal.x, currentScaleLocal.y, -currentScaleLocal.z);
+                    
+                    Vector3 euler = instanceObj.transform.rotation.eulerAngles;
+                    float yaw = euler.y;
+                    if (yaw > 180f) yaw -= 360f;
+                    instanceObj.transform.rotation = Quaternion.Euler(euler.x, -yaw, euler.z);
+                    
+                    MeshCollider collider = instanceObj.GetComponent<MeshCollider>();
+                    if (collider != null)
+                    {
+                        collider.convex = true;
+                        collider.isTrigger = true;
+                    }
+                    else
+                    {
+                        MeshFilter meshFilter = instanceObj.GetComponent<MeshFilter>();
+                        if (meshFilter != null && meshFilter.sharedMesh != null)
+                        {
+                            collider = instanceObj.AddComponent<MeshCollider>();
+                            collider.sharedMesh = meshFilter.sharedMesh;
+                            collider.convex = true;
+                            collider.isTrigger = true;
+                        }
+                    }
+                    
+                    AddLODToObject(instanceObj);
+                    if (parent != null)
+                        instanceObj.transform.SetParent(parent, worldPositionStays: true);
+                    
+                    result = true;
+                    onComplete?.Invoke(result);
+                    yield break;
+                }
+            }
+            catch (Exception ex)
+            {
+                UnityEngine.Debug.LogError($"Error placing grass {modelFilename}: {ex.Message}\n{ex.StackTrace}");
+                result = false;
+                onComplete?.Invoke(result);
+                yield break;
+            }
+            
+            GameObject grassModel = null;
+            yield return LoadNIFModelCoroutine(baseFilename, true, (loadedModel) => grassModel = loadedModel);
+            
+            if (grassModel == null)
+            {
+                onComplete?.Invoke(false);
+                yield break;
+            }
+            
+            try
+            {
+                string staticId = objectId?.objectId?.TrimEnd('\0');
+                string staticName = staticId;
+                TESNifLibrary.AddModel(staticId, staticName, baseFilename, baseFilenameNoExt, grassModel, combineMeshes: true);
+                
+                float scaledX = refp.x * TESGlobals.MORROWIND_TO_STATIC_SCALE;
+                float scaledZ = refp.y * TESGlobals.MORROWIND_TO_STATIC_SCALE;
+                float scaledY = refp.z * TESGlobals.MORROWIND_TO_STATIC_SCALE;
+                
+                Vector3 unityPosition = new Vector3(scaledX, scaledY, scaledZ);
+                Quaternion unityRotation = Quaternion.Euler(-refp.yaw * Mathf.Rad2Deg, -refp.pitch * Mathf.Rad2Deg, -refp.roll * Mathf.Rad2Deg);
+                
+                grassModel.transform.position = unityPosition;
+                grassModel.transform.rotation = unityRotation;
+                
+                Vector3 modelBaseScale = grassModel.transform.localScale;
+                grassModel.transform.localScale = modelBaseScale * (scale < 0 ? Mathf.Abs(scale) : scale);
+                
+                if (objectId != null && !string.IsNullOrEmpty(objectId.objectId))
+                    grassModel.name = objectId.objectId.TrimEnd('\0');
+                
+                Vector3 currentScaleLocal2 = grassModel.transform.localScale;
+                grassModel.transform.localScale = new Vector3(currentScaleLocal2.x, currentScaleLocal2.y, -currentScaleLocal2.z);
+                
+                Vector3 euler2 = grassModel.transform.rotation.eulerAngles;
+                float yaw2 = euler2.y;
+                if (yaw2 > 180f) yaw2 -= 360f;
+                grassModel.transform.rotation = Quaternion.Euler(euler2.x, -yaw2, euler2.z);
+                
+                MeshCollider meshCollider = grassModel.GetComponent<MeshCollider>();
+                if (meshCollider != null)
+                {
+                    meshCollider.convex = true;
+                    meshCollider.isTrigger = true;
+                }
+                else
+                {
+                    MeshFilter meshFilter = grassModel.GetComponent<MeshFilter>();
+                    if (meshFilter != null && meshFilter.sharedMesh != null)
+                    {
+                        meshCollider = grassModel.AddComponent<MeshCollider>();
+                        meshCollider.sharedMesh = meshFilter.sharedMesh;
+                        meshCollider.convex = true;
+                        meshCollider.isTrigger = true;
+                    }
+                }
+                
+                AddLODToObject(grassModel);
+                if (parent != null)
+                    grassModel.transform.SetParent(parent, worldPositionStays: true);
+                
+                result = true;
+            }
+            catch (Exception ex)
+            {
+                UnityEngine.Debug.LogError($"Error placing grass {modelFilename}: {ex.Message}\n{ex.StackTrace}");
+                result = false;
+            }
+            
+            onComplete?.Invoke(result);
+        }
+
+        /// <summary>
+        /// Coroutine version of PlaceStaticObject that uses async model loading
+        /// </summary>
+        private IEnumerator PlaceStaticObjectCoroutine(string modelFilename, SubRecordCellREFP refp, float scale, SubRecordCellObjectID objectId, Transform parent, int cellGridX, int cellGridY, Record[] allRecords, System.Action<bool> onComplete)
+        {
+            bool result = false;
+            string baseFilename = Path.GetFileName(modelFilename);
+            string baseFilenameNoExt = Path.GetFileNameWithoutExtension(baseFilename);
+            
+            TESNifLibrary.NifEntry cachedEntry = TESNifLibrary.GetModelByBaseFilename(baseFilenameNoExt);
+            if (cachedEntry != null)
+            {
+                try
+                {
+                    GameObject instanceObj = GameObject.Instantiate(cachedEntry.Model);
+                    instanceObj.name = cachedEntry.Model.name;
+                    
+                    float scaledX = refp.x * TESGlobals.MORROWIND_TO_STATIC_SCALE;
+                    float scaledZ = refp.y * TESGlobals.MORROWIND_TO_STATIC_SCALE;
+                    float scaledY = refp.z * TESGlobals.MORROWIND_TO_STATIC_SCALE;
+                    
+                    Vector3 unityPosition = new Vector3(scaledX, scaledY, scaledZ);
+                    Quaternion unityRotation = Quaternion.Euler(-refp.yaw * Mathf.Rad2Deg, -refp.pitch * Mathf.Rad2Deg, -refp.roll * Mathf.Rad2Deg);
+                    
+                    instanceObj.transform.position = unityPosition;
+                    instanceObj.transform.rotation = unityRotation;
+                    
+                    Vector3 instanceBaseScale = new Vector3(TESGlobals.MORROWIND_TO_STATIC_SCALE, TESGlobals.MORROWIND_TO_STATIC_SCALE, TESGlobals.MORROWIND_TO_STATIC_SCALE);
+                    instanceObj.transform.localScale = instanceBaseScale * (scale < 0 ? Mathf.Abs(scale) : scale);
+                    
+                    if (objectId != null && !string.IsNullOrEmpty(objectId.objectId))
+                        instanceObj.name = objectId.objectId.TrimEnd('\0');
+                    
+                    AddLODToObject(instanceObj);
+                    if (parent != null)
+                        instanceObj.transform.SetParent(parent, worldPositionStays: true);
+                    
+                    Vector3 currentScale = instanceObj.transform.localScale;
+                    instanceObj.transform.localScale = new Vector3(currentScale.x, currentScale.y, -currentScale.z);
+                    
+                    Vector3 euler = instanceObj.transform.rotation.eulerAngles;
+                    float yaw = euler.y;
+                    if (yaw > 180f) yaw -= 360f;
+                    instanceObj.transform.rotation = Quaternion.Euler(euler.x, -yaw, euler.z);
+                    
+                    result = true;
+                }
+                catch (Exception ex)
+                {
+                    UnityEngine.Debug.LogError($"Error placing static object {modelFilename}: {ex.Message}\n{ex.StackTrace}");
+                    result = false;
+                }
+                
+                onComplete?.Invoke(result);
+                yield break;
+            }
+            
+            GameObject modelObj = null;
+            yield return LoadNIFModelCoroutine(baseFilename, false, (loadedModel) => modelObj = loadedModel);
+            
+            if (modelObj == null)
+            {
+                onComplete?.Invoke(false);
+                yield break;
+            }
+            
+            try
+            {
+                string staticId = objectId?.objectId?.TrimEnd('\0');
+                string staticName = staticId;
+                TESNifLibrary.AddModel(staticId, staticName, modelFilename, baseFilenameNoExt, modelObj, combineMeshes: false);
+                
+                float scaledX2 = refp.x * TESGlobals.MORROWIND_TO_STATIC_SCALE;
+                float scaledZ2 = refp.y * TESGlobals.MORROWIND_TO_STATIC_SCALE;
+                float scaledY2 = refp.z * TESGlobals.MORROWIND_TO_STATIC_SCALE;
+                
+                Vector3 unityPosition2 = new Vector3(scaledX2, scaledY2, scaledZ2);
+                Quaternion unityRotation2 = Quaternion.Euler(-refp.yaw * Mathf.Rad2Deg, -refp.pitch * Mathf.Rad2Deg, -refp.roll * Mathf.Rad2Deg);
+                
+                modelObj.transform.position = unityPosition2;
+                modelObj.transform.rotation = unityRotation2;
+                
+                Vector3 modelBaseScale = modelObj.transform.localScale;
+                modelObj.transform.localScale = modelBaseScale * (scale < 0 ? Mathf.Abs(scale) : scale);
+                
+                if (objectId != null && !string.IsNullOrEmpty(objectId.objectId))
+                    modelObj.name = objectId.objectId.TrimEnd('\0');
+                else
+                    modelObj.name = Path.GetFileNameWithoutExtension(modelFilename);
+                
+                AddLODToObject(modelObj);
+                if (parent != null)
+                    modelObj.transform.SetParent(parent, worldPositionStays: true);
+                
+                Vector3 modelCurrentScale = modelObj.transform.localScale;
+                modelObj.transform.localScale = new Vector3(modelCurrentScale.x, modelCurrentScale.y, -modelCurrentScale.z);
+                
+                Vector3 modelEuler = modelObj.transform.rotation.eulerAngles;
+                float modelYaw = modelEuler.y;
+                if (modelYaw > 180f) modelYaw -= 360f;
+                modelObj.transform.rotation = Quaternion.Euler(modelEuler.x, -modelYaw, modelEuler.z);
+                
+                result = true;
+            }
+            catch (Exception ex)
+            {
+                UnityEngine.Debug.LogError($"Error placing static object {modelFilename}: {ex.Message}\n{ex.StackTrace}");
+                result = false;
+            }
+            
+            onComplete?.Invoke(result);
         }
 
         /// <summary>
@@ -1079,7 +1507,7 @@ namespace ESMSharp.TES3Terrain
                 }
                 
                 // Load the NIF model with meshes combined (for grass, same as trees)
-                GameObject grassModel = _nifLoader.LoadNIFFromCache(baseFilename, combineMeshes: true);
+                GameObject grassModel = LoadNIFModel(baseFilename, combineMeshes: true);
                 if (grassModel == null)
                 {
                     //UnityEngine.Debug.LogWarning($"Failed to load grass model: {baseFilename}");
@@ -1181,6 +1609,188 @@ namespace ESMSharp.TES3Terrain
             {
                 UnityEngine.Debug.LogError($"Error placing grass {modelFilename}: {ex.Message}\n{ex.StackTrace}");
                 return false;
+            }
+        }
+
+        /// <summary>
+        /// Coroutine version of PlaceReference that yields during model loading
+        /// </summary>
+        private IEnumerator PlaceReferenceCoroutine(SubRecordCellObjectID objectId, SubRecordCellREFP refp, float scale, Dictionary<string, RecordStat> statRecordsByName, GameObject cellParent, int cellGridX, int cellGridY, ObjectType objectType, Terrain terrain, Transform parent, PlacementCounts counts, Record[] allRecords = null)
+        {
+            if (objectId == null || string.IsNullOrEmpty(objectId.objectId))
+            {
+                UnityEngine.Debug.LogWarning("Reference has no Object ID (model ID)");
+                switch (objectType)
+                {
+                    case ObjectType.Trees: counts.FailedTrees++; break;
+                    case ObjectType.Grass: counts.FailedGrass++; break;
+                    case ObjectType.LargeStructures: counts.FailedStructures++; break;
+                }
+                yield break;
+            }
+
+            // Clean the model ID name
+            string modelId = objectId.objectId.TrimEnd('\0', ' ', '\t', '\r', '\n');
+            modelId = modelId.Replace("\0", "");
+            modelId = modelId.Trim();
+
+            // Check if this might be an NPC (quick check - if it's not in STAT records)
+            string cleanedModelId = new string(modelId.Where(c => c != '\0').ToArray()).Trim();
+            bool mightBeNPC = !statRecordsByName.ContainsKey(modelId) && !statRecordsByName.ContainsKey(cleanedModelId);
+            
+            if (mightBeNPC)
+            {
+                TESCharacterManager.NPCEntry npcEntry = TESCharacterManager.GetNPC(modelId);
+                if (npcEntry == null && !string.Equals(modelId, cleanedModelId, StringComparison.OrdinalIgnoreCase))
+                {
+                    npcEntry = TESCharacterManager.GetNPC(cleanedModelId);
+                }
+                
+                if (npcEntry != null)
+                {
+                    UnityEngine.Debug.LogWarning($"PlaceReference: Found NPC '{modelId}' but ANAM was not detected. This reference should have been handled by PlaceNPC().");
+                    switch (objectType)
+                    {
+                        case ObjectType.Trees: counts.FailedTrees++; break;
+                        case ObjectType.Grass: counts.FailedGrass++; break;
+                        case ObjectType.LargeStructures: counts.FailedStructures++; break;
+                    }
+                    yield break;
+                }
+            }
+
+            string modelFilename = null;
+
+            // First, try to look up STAT record by name
+            if (statRecordsByName.ContainsKey(modelId))
+            {
+                RecordStat statRecord = statRecordsByName[modelId];
+                foreach (SubRecords statSubrec in statRecord.subRecords)
+                {
+                    SubRecordStatMODL modl = statSubrec as SubRecordStatMODL;
+                    if (modl != null)
+                    {
+                        modelFilename = modl.model;
+                        break;
+                    }
+                }
+
+                if (!string.IsNullOrEmpty(modelFilename))
+                {
+                    modelFilename = modelFilename.TrimEnd('\0', ' ', '\t', '\r', '\n');
+                    modelFilename = modelFilename.Replace("\0", "");
+                    modelFilename = modelFilename.Trim();
+                }
+            }
+
+            // If STAT record lookup failed, try to find NIF file directly in cache
+            if (string.IsNullOrEmpty(modelFilename))
+            {
+                string cacheDir = Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Models", _esm);
+                if (Directory.Exists(cacheDir))
+                {
+                    string[] extensions = { ".nif", ".NIF" };
+                    foreach (string ext in extensions)
+                    {
+                        string testPath = Path.Combine(cacheDir, modelId + ext);
+                        if (File.Exists(testPath))
+                        {
+                            modelFilename = Path.GetFileName(testPath);
+                            break;
+                        }
+                    }
+
+                    if (string.IsNullOrEmpty(modelFilename))
+                    {
+                        string[] files = Directory.GetFiles(cacheDir, "*.nif", SearchOption.AllDirectories);
+                        foreach (string file in files)
+                        {
+                            string fileName = Path.GetFileNameWithoutExtension(file);
+                            if (string.Equals(fileName, modelId, StringComparison.OrdinalIgnoreCase))
+                            {
+                                modelFilename = Path.GetFileName(file);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // If still not found, try to extract from BSA
+            if (string.IsNullOrEmpty(modelFilename))
+            {
+                modelFilename = TryExtractFromBSA(modelId);
+            }
+
+            if (string.IsNullOrEmpty(modelFilename))
+            {
+                UnityEngine.Debug.LogWarning($"Could not find model for ID '{modelId}' (checked STAT records and cache directory)");
+                switch (objectType)
+                {
+                    case ObjectType.Trees: counts.FailedTrees++; break;
+                    case ObjectType.Grass: counts.FailedGrass++; break;
+                    case ObjectType.LargeStructures: counts.FailedStructures++; break;
+                }
+                yield break;
+            }
+
+            // Filter based on object type
+            string baseFilename = Path.GetFileNameWithoutExtension(modelFilename).ToLower();
+            bool shouldPlace = false;
+            switch (objectType)
+            {
+                case ObjectType.LargeStructures:
+                    shouldPlace = !IsTreeModel(baseFilename) && !IsGrassModel(baseFilename);
+                    break;
+                case ObjectType.Trees:
+                    shouldPlace = IsTreeModel(baseFilename);
+                    break;
+                case ObjectType.Grass:
+                    shouldPlace = IsGrassModel(baseFilename);
+                    break;
+            }
+            
+            if (!shouldPlace)
+            {
+                yield break;
+            }
+
+            // Place the object based on type (using async coroutine versions)
+            bool success = false;
+            if (objectType == ObjectType.Trees)
+            {
+                Transform refParent = cellParent != null ? cellParent.transform : parent;
+                yield return PlaceTreeCoroutine(modelFilename, refp, scale, objectId, terrain, cellGridX, cellGridY, refParent, (result) => success = result);
+            }
+            else if (objectType == ObjectType.Grass)
+            {
+                Transform refParent = cellParent != null ? cellParent.transform : parent;
+                yield return PlaceGrassDetailCoroutine(modelFilename, refp, scale, objectId, terrain, cellGridX, cellGridY, refParent, (result) => success = result);
+            }
+            else if (objectType == ObjectType.LargeStructures)
+            {
+                Transform refParent = cellParent != null ? cellParent.transform : parent;
+                yield return PlaceStaticObjectCoroutine(modelFilename, refp, scale, objectId, refParent, cellGridX, cellGridY, allRecords, (result) => success = result);
+            }
+            
+            // Update counts based on result
+            if (success)
+            {
+                switch (objectType)
+                {
+                    case ObjectType.Trees: counts.PlacedTrees++; break;
+                    case ObjectType.Grass: counts.PlacedGrass++; break;
+                    case ObjectType.LargeStructures: counts.PlacedStructures++; break;
+                }
+            }
+            else
+            {
+                switch (objectType)
+                {
+                    case ObjectType.Trees: counts.FailedTrees++; break;
+                    case ObjectType.Grass: counts.FailedGrass++; break;
+                    case ObjectType.LargeStructures: counts.FailedStructures++; break;
+                }
             }
         }
 
@@ -1442,7 +2052,7 @@ namespace ESMSharp.TES3Terrain
                 }
 
                 // Try to load the model temporarily
-                GameObject tempModel = _nifLoader.LoadNIFFromCache(baseFilename);
+                GameObject tempModel = LoadNIFModel(baseFilename, combineMeshes: false);
                 if (tempModel != null)
                 {
                     float radius = GetBoundingSphereRadiusFromGameObject(tempModel, scale);
@@ -1818,7 +2428,8 @@ namespace ESMSharp.TES3Terrain
                 }
 
                 // Load the NIF model for the first time
-                GameObject modelObj = _nifLoader.LoadNIFFromCache(baseFilename);
+                // Use async loading if enabled, otherwise synchronous
+                GameObject modelObj = LoadNIFModel(baseFilename, combineMeshes: false);
                 if (modelObj == null)
                 {
                     UnityEngine.Debug.LogWarning($"Failed to load NIF model: {baseFilename}");
@@ -1955,6 +2566,294 @@ namespace ESMSharp.TES3Terrain
             //         // Create LOD Group and assign meshes...
             //     }
             // }
+        }
+
+        /// <summary>
+        /// Coroutine version of PlaceNPC that yields during model loading
+        /// </summary>
+        private IEnumerator PlaceNPCCoroutine(string npcId, SubRecordCellREFP refp, float scale, GameObject cellParent, int cellGridX, int cellGridY, PlacementCounts counts)
+        {
+            int placedCount = 0;
+            int failedCount = 0;
+            
+            // Declare variables outside try block so they're accessible after
+            TESCharacterManager.BodyPartEntry bodyPart = null;
+            TESCharacterManager.BodyPartEntry headPart = null;
+            TESCharacterManager.BodyPartEntry hairPart = null;
+            GameObject npcObj = null;
+            
+            try
+            {
+                // Clean NPC ID
+                npcId = npcId?.TrimEnd('\0', ' ', '\t', '\r', '\n');
+                npcId = npcId?.Replace("\0", "");
+                npcId = npcId?.Trim();
+                
+                if (!string.IsNullOrEmpty(npcId))
+                {
+                    npcId = new string(npcId.Where(c => c != '\0').ToArray()).Trim();
+                }
+
+                if (string.IsNullOrEmpty(npcId))
+                {
+                    UnityEngine.Debug.LogWarning("PlaceNPC: NPC ID is null or empty");
+                    failedCount++;
+                    counts.PlacedNPCs += placedCount;
+                    counts.FailedNPCs += failedCount;
+                    yield break;
+                }
+
+                TESCharacterManager.NPCEntry npcEntry = TESCharacterManager.GetNPC(npcId);
+                if (npcEntry == null)
+                {
+                    UnityEngine.Debug.LogWarning($"PlaceNPC: NPC '{npcId}' not found in TESCharacterManager");
+                    failedCount++;
+                    counts.PlacedNPCs += placedCount;
+                    counts.FailedNPCs += failedCount;
+                    yield break;
+                }
+
+                // Get body part entries
+                if (!string.IsNullOrEmpty(npcEntry.ModelFilename))
+                {
+                    string cleanedBodyPartId = npcEntry.ModelFilename.TrimEnd('\0', ' ', '\t', '\r', '\n');
+                    cleanedBodyPartId = cleanedBodyPartId.Replace("\0", "");
+                    cleanedBodyPartId = new string(cleanedBodyPartId.Where(c => c != '\0').ToArray()).Trim();
+                    
+                    if (!string.IsNullOrEmpty(cleanedBodyPartId))
+                    {
+                        bodyPart = TESCharacterManager.GetBodyPart(cleanedBodyPartId);
+                    }
+                }
+                
+                if (!string.IsNullOrEmpty(npcEntry.HeadModel))
+                {
+                    string cleanedHeadPartId = npcEntry.HeadModel.TrimEnd('\0', ' ', '\t', '\r', '\n');
+                    cleanedHeadPartId = cleanedHeadPartId.Replace("\0", "");
+                    cleanedHeadPartId = new string(cleanedHeadPartId.Where(c => c != '\0').ToArray()).Trim();
+                    
+                    if (!string.IsNullOrEmpty(cleanedHeadPartId))
+                    {
+                        headPart = TESCharacterManager.GetBodyPart(cleanedHeadPartId);
+                    }
+                }
+                
+                if (!string.IsNullOrEmpty(npcEntry.HairModel))
+                {
+                    string cleanedHairPartId = npcEntry.HairModel.TrimEnd('\0', ' ', '\t', '\r', '\n');
+                    cleanedHairPartId = cleanedHairPartId.Replace("\0", "");
+                    cleanedHairPartId = new string(cleanedHairPartId.Where(c => c != '\0').ToArray()).Trim();
+                    
+                    if (!string.IsNullOrEmpty(cleanedHairPartId))
+                    {
+                        hairPart = TESCharacterManager.GetBodyPart(cleanedHairPartId);
+                    }
+                }
+
+                // Convert coordinates
+                float scaledX = refp.x * TESGlobals.MORROWIND_TO_STATIC_SCALE;
+                float scaledZ = refp.y * TESGlobals.MORROWIND_TO_STATIC_SCALE;
+                float scaledY = refp.z * TESGlobals.MORROWIND_TO_STATIC_SCALE;
+
+                Vector3 unityPosition = new Vector3(scaledX, scaledY, scaledZ);
+                Quaternion unityRotation = Quaternion.Euler(-refp.yaw * Mathf.Rad2Deg, -refp.pitch * Mathf.Rad2Deg, -refp.roll * Mathf.Rad2Deg);
+
+                npcObj = new GameObject($"{npcEntry.DisplayName ?? npcId} (NPC)");
+                npcObj.transform.position = unityPosition;
+                npcObj.transform.rotation = unityRotation;
+                
+                Vector3 characterBaseScale = new Vector3(TESGlobals.MORROWIND_TO_CHARACTER_SCALE, TESGlobals.MORROWIND_TO_CHARACTER_SCALE, TESGlobals.MORROWIND_TO_CHARACTER_SCALE);
+                npcObj.transform.localScale = characterBaseScale * (scale < 0 ? Mathf.Abs(scale) : scale);
+            }
+            catch (System.Exception ex)
+            {
+                UnityEngine.Debug.LogError($"PlaceNPC: Exception while setting up NPC '{npcId}' in cell ({cellGridX}, {cellGridY}): {ex.Message}");
+                failedCount++;
+                counts.PlacedNPCs += placedCount;
+                counts.FailedNPCs += failedCount;
+                yield break;
+            }
+            
+            if (npcObj == null)
+            {
+                // Setup failed, can't continue
+                counts.PlacedNPCs += placedCount;
+                counts.FailedNPCs += failedCount;
+                yield break;
+            }
+            
+            // Load body parts asynchronously (outside try-catch to allow yield return)
+            int loadedPartsCount = 0;
+            GameObject bodyModel = null;
+            GameObject headModel = null;
+            GameObject hairModel = null;
+            
+            if (bodyPart != null && !string.IsNullOrEmpty(bodyPart.ModelFilename))
+            {
+                yield return LoadBodyPartModelCoroutine(bodyPart.ModelFilename, bodyPart.BodyPartId, (loadedModel) => bodyModel = loadedModel);
+            }
+            
+            if (headPart != null && !string.IsNullOrEmpty(headPart.ModelFilename))
+            {
+                yield return LoadBodyPartModelCoroutine(headPart.ModelFilename, headPart.BodyPartId, (loadedModel) => headModel = loadedModel);
+            }
+            
+            if (hairPart != null && !string.IsNullOrEmpty(hairPart.ModelFilename))
+            {
+                yield return LoadBodyPartModelCoroutine(hairPart.ModelFilename, hairPart.BodyPartId, (loadedModel) => hairModel = loadedModel);
+            }
+            
+            try
+            {
+                if (bodyModel != null)
+                {
+                    bodyModel.transform.SetParent(npcObj.transform, false);
+                    bodyModel.name = "Body";
+                    loadedPartsCount++;
+                }
+                
+                if (headModel != null)
+                {
+                    headModel.transform.SetParent(npcObj.transform, false);
+                    headModel.name = "Head";
+                    loadedPartsCount++;
+                }
+                
+                if (hairModel != null)
+                {
+                    hairModel.transform.SetParent(npcObj.transform, false);
+                    hairModel.name = "Hair";
+                    loadedPartsCount++;
+                }
+                
+                if (loadedPartsCount == 0)
+                {
+                    UnityEngine.Debug.LogWarning($"PlaceNPC: NPC '{npcId}' has no loadable body parts.");
+                    GameObject.Destroy(npcObj);
+                    failedCount++;
+                    counts.PlacedNPCs += placedCount;
+                    counts.FailedNPCs += failedCount;
+                    yield break;
+                }
+
+                // Fix reflection issues
+                Vector3 currentScale = npcObj.transform.localScale;
+                npcObj.transform.localScale = new Vector3(currentScale.x, currentScale.y, -currentScale.z);
+
+                Vector3 euler = npcObj.transform.rotation.eulerAngles;
+                float yaw = euler.y;
+                if (yaw > 180f) yaw -= 360f;
+                npcObj.transform.rotation = Quaternion.Euler(euler.x, -yaw, euler.z);
+
+                Transform parentTransform = cellParent != null ? cellParent.transform : null;
+                if (parentTransform != null)
+                {
+                    npcObj.transform.SetParent(parentTransform, worldPositionStays: true);
+                }
+
+                placedCount++;
+            }
+            catch (System.Exception ex)
+            {
+                UnityEngine.Debug.LogError($"PlaceNPC: Exception while placing NPC '{npcId}' in cell ({cellGridX}, {cellGridY}): {ex.Message}");
+                failedCount++;
+            }
+            
+            counts.PlacedNPCs += placedCount;
+            counts.FailedNPCs += failedCount;
+        }
+        
+        /// <summary>
+        /// Coroutine version of LoadBodyPartModel that uses async model loading
+        /// </summary>
+        private IEnumerator LoadBodyPartModelCoroutine(string modelFilename, string bodyPartId, System.Action<GameObject> onComplete)
+        {
+            if (string.IsNullOrEmpty(modelFilename))
+            {
+                onComplete?.Invoke(null);
+                yield break;
+            }
+            
+            modelFilename = modelFilename.TrimEnd('\0', ' ', '\t', '\r', '\n');
+            modelFilename = modelFilename.Replace("\0", "");
+            modelFilename = modelFilename.Trim();
+            modelFilename = modelFilename.Replace('\\', '/');
+            
+            string baseFilename = Path.GetFileName(modelFilename);
+            string baseFilenameNoExt = Path.GetFileNameWithoutExtension(baseFilename);
+            
+            TESNifLibrary.NifEntry cachedEntry = TESNifLibrary.GetModelByBaseFilename(baseFilenameNoExt);
+            if (cachedEntry == null)
+            {
+                string baseFilenameLower = baseFilenameNoExt.ToLowerInvariant();
+                cachedEntry = TESNifLibrary.GetModelByBaseFilename(baseFilenameLower);
+            }
+            
+            if (cachedEntry != null)
+            {
+                GameObject instantiatedModel = GameObject.Instantiate(cachedEntry.Model);
+                instantiatedModel.name = baseFilenameNoExt;
+                onComplete?.Invoke(instantiatedModel);
+                yield break;
+            }
+            
+            GameObject modelObj = null;
+            yield return LoadNIFModelCoroutine(baseFilename, false, (loadedModel) => modelObj = loadedModel);
+            
+            if (modelObj == null)
+            {
+                // Try case-insensitive search
+                string cacheDir = Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Models", _esm);
+                if (Directory.Exists(cacheDir))
+                {
+                    string[] files = Directory.GetFiles(cacheDir, "*.nif", SearchOption.TopDirectoryOnly);
+                    string baseFilenameLower = baseFilenameNoExt.ToLowerInvariant();
+                    foreach (string file in files)
+                    {
+                        string fileName = Path.GetFileName(file);
+                        string fileNameNoExt = Path.GetFileNameWithoutExtension(fileName);
+                        if (string.Equals(fileNameNoExt, baseFilenameLower, StringComparison.OrdinalIgnoreCase))
+                        {
+                            yield return LoadNIFModelCoroutine(fileName, false, (loadedModel) => modelObj = loadedModel);
+                            if (modelObj != null)
+                            {
+                                baseFilename = fileName;
+                                baseFilenameNoExt = fileNameNoExt;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            
+            if (modelObj != null)
+            {
+                TESNifLibrary.AddModel(bodyPartId, bodyPartId, modelFilename, baseFilenameNoExt, modelObj, combineMeshes: false);
+                modelObj.name = baseFilenameNoExt;
+                onComplete?.Invoke(modelObj);
+                yield break;
+            }
+            
+            // Try BSA extraction
+            string extractedFilename = TryExtractFromBSA(baseFilenameNoExt);
+            if (!string.IsNullOrEmpty(extractedFilename))
+            {
+                string normalizedExtractedFilename = Path.GetFileName(extractedFilename);
+                normalizedExtractedFilename = normalizedExtractedFilename.Replace('\\', '/');
+                
+                yield return LoadNIFModelCoroutine(normalizedExtractedFilename, false, (loadedModel) => modelObj = loadedModel);
+                
+                if (modelObj != null)
+                {
+                    TESNifLibrary.AddModel(bodyPartId, bodyPartId, modelFilename, baseFilenameNoExt, modelObj, combineMeshes: false);
+                    modelObj.name = baseFilenameNoExt;
+                    onComplete?.Invoke(modelObj);
+                    yield break;
+                }
+            }
+            
+            UnityEngine.Debug.LogWarning($"PlaceNPC: Failed to load body part model '{modelFilename}' (ID: {bodyPartId})");
+            onComplete?.Invoke(null);
         }
 
         /// <summary>
@@ -2279,7 +3178,7 @@ namespace ESMSharp.TES3Terrain
             }
             
             // Try to load from cache first (try original case, then lowercase)
-            GameObject modelObj = _nifLoader.LoadNIFFromCache(baseFilename);
+            GameObject modelObj = LoadNIFModel(baseFilename, combineMeshes: false);
             if (modelObj == null && !string.Equals(baseFilename, baseFilenameLower, StringComparison.Ordinal))
             {
                 // Try case-insensitive search in cache directory
@@ -2294,7 +3193,7 @@ namespace ESMSharp.TES3Terrain
                         if (string.Equals(fileNameNoExt, baseFilenameNoExtLower, StringComparison.OrdinalIgnoreCase))
                         {
                             // Found case-insensitive match, try loading with the actual filename
-                            modelObj = _nifLoader.LoadNIFFromCache(fileName);
+                            modelObj = LoadNIFModel(fileName, combineMeshes: false);
                             if (modelObj != null)
                             {
                                 baseFilename = fileName; // Update to use the actual filename
@@ -2329,7 +3228,7 @@ namespace ESMSharp.TES3Terrain
                 normalizedExtractedFilename = normalizedExtractedFilename.Replace('\\', '/');
                 
                 // Try loading again after extraction
-                GameObject extractedModel = _nifLoader.LoadNIFFromCache(normalizedExtractedFilename);
+                GameObject extractedModel = LoadNIFModel(normalizedExtractedFilename, combineMeshes: false);
                 
                 // If that failed, try case-insensitive search
                 if (extractedModel == null)
@@ -2344,7 +3243,7 @@ namespace ESMSharp.TES3Terrain
                             string fileName = Path.GetFileName(file);
                             if (string.Equals(fileName, normalizedExtractedFilename, StringComparison.OrdinalIgnoreCase))
                             {
-                                extractedModel = _nifLoader.LoadNIFFromCache(fileName);
+                                extractedModel = LoadNIFModel(fileName, combineMeshes: false);
                                 if (extractedModel != null)
                                 {
                                     normalizedExtractedFilename = fileName;
@@ -2367,6 +3266,189 @@ namespace ESMSharp.TES3Terrain
             }
             
             UnityEngine.Debug.LogWarning($"PlaceNPC: Failed to load body part model '{modelFilename}' (ID: {bodyPartId}) from cache or BSA. File may exist but niflib.net cannot parse it.");
+            return null;
+        }
+
+        /// <summary>
+        /// Coroutine version of LoadNIFModel that yields during file I/O
+        /// </summary>
+        private IEnumerator LoadNIFModelCoroutine(string modelFilename, bool combineMeshes, System.Action<GameObject> onComplete)
+        {
+            GameObject result = null;
+            
+            if (!TESGlobals.EnableMultithreadedModelLoading)
+            {
+                // Synchronous loading (for debugging)
+                result = _nifLoader.LoadNIFFromCache(modelFilename, combineMeshes);
+                onComplete?.Invoke(result);
+                yield break;
+            }
+
+            // Check cache first (thread-safe read)
+            string baseFilenameNoExt = Path.GetFileNameWithoutExtension(modelFilename);
+            TESNifLibrary.NifEntry cachedEntry = TESNifLibrary.GetModelByBaseFilename(baseFilenameNoExt);
+            if (cachedEntry != null)
+            {
+                // Return cached model immediately
+                result = GameObject.Instantiate(cachedEntry.Model);
+                result.name = cachedEntry.Model.name;
+                onComplete?.Invoke(result);
+                yield break;
+            }
+
+            // Use Task-based async loading for file I/O on background thread
+            // Parse and create GameObject on main thread
+            byte[] nifData = null;
+            System.Exception loadError = null;
+            
+            // Load file on background thread
+            System.Threading.Tasks.Task fileLoadTask = System.Threading.Tasks.Task.Run(() =>
+            {
+                try
+                {
+                    string cachePath = FindNIFInCache(_esm, modelFilename);
+                    if (string.IsNullOrEmpty(cachePath) || !System.IO.File.Exists(cachePath))
+                    {
+                        nifData = null;
+                        return;
+                    }
+                    nifData = System.IO.File.ReadAllBytes(cachePath);
+                }
+                catch (System.Exception ex)
+                {
+                    loadError = ex;
+                    nifData = null;
+                }
+            });
+
+            // Yield while file I/O happens on background thread
+            while (!fileLoadTask.IsCompleted)
+            {
+                yield return null;
+            }
+
+            if (loadError != null)
+            {
+                UnityEngine.Debug.LogError($"LoadNIFModel: Error loading {modelFilename}: {loadError.Message}");
+                onComplete?.Invoke(null);
+                yield break;
+            }
+
+            if (nifData == null)
+            {
+                UnityEngine.Debug.LogWarning($"LoadNIFModel: File not found: {modelFilename}");
+                onComplete?.Invoke(null);
+                yield break;
+            }
+
+            // Parse and create GameObject on main thread (must be on main thread)
+            try
+            {
+                string actualFilename = Path.GetFileName(modelFilename);
+                result = _nifLoader.LoadNIFFromBytes(nifData, actualFilename, combineMeshes);
+            }
+            catch (System.Exception ex)
+            {
+                UnityEngine.Debug.LogError($"LoadNIFModel: Error parsing {modelFilename}: {ex.Message}");
+                result = null;
+            }
+
+            onComplete?.Invoke(result);
+        }
+
+        /// <summary>
+        /// Loads a NIF model, using async loading if multithreading is enabled
+        /// When async is enabled, file I/O happens on background thread
+        /// </summary>
+        private GameObject LoadNIFModel(string modelFilename, bool combineMeshes = false)
+        {
+            if (!TESGlobals.EnableMultithreadedModelLoading)
+            {
+                // Synchronous loading (for debugging)
+                return _nifLoader.LoadNIFFromCache(modelFilename, combineMeshes);
+            }
+
+            // Check cache first (thread-safe read)
+            string baseFilenameNoExt = Path.GetFileNameWithoutExtension(modelFilename);
+            TESNifLibrary.NifEntry cachedEntry = TESNifLibrary.GetModelByBaseFilename(baseFilenameNoExt);
+            if (cachedEntry != null)
+            {
+                // Return cached model immediately
+                GameObject instance = GameObject.Instantiate(cachedEntry.Model);
+                instance.name = cachedEntry.Model.name;
+                return instance;
+            }
+
+            // For coroutine-based loading, we need to use the coroutine version
+            // But since this is called from synchronous code, we'll use Task.Result as fallback
+            // The coroutine version should be used from coroutine contexts
+            try
+            {
+                // Load file on background thread
+                System.Threading.Tasks.Task<byte[]> fileLoadTask = System.Threading.Tasks.Task.Run(() =>
+                {
+                    string cachePath = FindNIFInCache(_esm, modelFilename);
+                    if (string.IsNullOrEmpty(cachePath) || !System.IO.File.Exists(cachePath))
+                    {
+                        return null;
+                    }
+                    return System.IO.File.ReadAllBytes(cachePath);
+                });
+
+                // Wait for file load (this blocks but file I/O is on background thread)
+                byte[] nifData = fileLoadTask.Result;
+                if (nifData == null)
+                {
+                    UnityEngine.Debug.LogWarning($"LoadNIFModel: File not found: {modelFilename}");
+                    return null;
+                }
+
+                // Parse and create GameObject on main thread (must be on main thread)
+                string actualFilename = Path.GetFileName(modelFilename);
+                return _nifLoader.LoadNIFFromBytes(nifData, actualFilename, combineMeshes);
+            }
+            catch (System.Exception ex)
+            {
+                UnityEngine.Debug.LogError($"LoadNIFModel: Error loading {modelFilename}: {ex.Message}");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Finds NIF file in cache directory with case-insensitive search
+        /// </summary>
+        private string FindNIFInCache(string esm, string modelFilename)
+        {
+            // Normalize filename
+            string normalizedFilename = modelFilename?.Replace('\\', '/');
+            normalizedFilename = Path.GetFileName(normalizedFilename);
+            
+            string cachePath = Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Models", esm, normalizedFilename);
+            
+            if (System.IO.File.Exists(cachePath))
+                return cachePath;
+
+            // Try original filename
+            string originalPath = Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Models", esm, modelFilename);
+            if (System.IO.File.Exists(originalPath))
+                return originalPath;
+
+            // Try case-insensitive search
+            string cacheDir = Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Models", esm);
+            if (System.IO.Directory.Exists(cacheDir))
+            {
+                string[] files = System.IO.Directory.GetFiles(cacheDir, "*.nif", System.IO.SearchOption.TopDirectoryOnly);
+                string searchFilename = Path.GetFileName(modelFilename);
+                foreach (string file in files)
+                {
+                    string fileName = Path.GetFileName(file);
+                    if (string.Equals(fileName, searchFilename, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return file;
+                    }
+                }
+            }
+
             return null;
         }
     }
