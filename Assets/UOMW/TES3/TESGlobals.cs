@@ -42,5 +42,20 @@ namespace ESMSharp.TES3
         /// Heightmap cell size (65 units per cell for seamless neighbor alignment)
         /// </summary>
         public const float HEIGHTMAP_CELL_SIZE = 65f;
+        
+        /// <summary>
+        /// Morrowind character height in Morrowind units (standard NPC height)
+        /// Characters in Morrowind are typically 128 units tall
+        /// </summary>
+        public const float MORROWIND_CHARACTER_HEIGHT = 128f;
+        
+        /// <summary>
+        /// Scale factor for NPC/character models
+        /// Characters are 128 Morrowind units tall and should be 1 Unity unit tall
+        /// Since body part models are already in Morrowind units, we need to scale them to Unity scale
+        /// Scale = 1 Unity unit / 128 Morrowind units = 1.0 (models are already correctly sized)
+        /// Actually, models loaded from NIF are already in their native scale, so we use 1.0
+        /// </summary>
+        public const float MORROWIND_TO_CHARACTER_SCALE = 1f; // Models are already at correct scale when loaded
     }
 }

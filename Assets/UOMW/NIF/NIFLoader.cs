@@ -205,11 +205,47 @@ namespace ESMSharp.NIF
         /// </summary>
         public GameObject LoadNIFFromCache(string modelFilename, bool combineMeshes = false)
         {
-            string cachePath = System.IO.Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Models", _esm, modelFilename);
+            // Normalize path separators - ensure forward slashes are used consistently
+            // Path.Combine will use the correct separator for the OS, but we need to normalize the filename first
+            string normalizedFilename = modelFilename?.Replace('\\', '/');
+            normalizedFilename = System.IO.Path.GetFileName(normalizedFilename); // Get just the filename, ignore any path
+            
+            string cachePath = System.IO.Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Models", _esm, normalizedFilename);
+            
+            // Also try with original filename in case normalization changed it
             if (!File.Exists(cachePath))
             {
-                UnityEngine.Debug.LogError($"NIF file not found: {cachePath}");
-                return null;
+                // Try original filename
+                string originalPath = System.IO.Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Models", _esm, modelFilename);
+                if (File.Exists(originalPath))
+                {
+                    cachePath = originalPath;
+                }
+                else
+                {
+                    // Try case-insensitive search in cache directory
+                    string cacheDir = System.IO.Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Models", _esm);
+                    if (Directory.Exists(cacheDir))
+                    {
+                        string[] files = Directory.GetFiles(cacheDir, "*.nif", SearchOption.TopDirectoryOnly);
+                        string searchFilename = normalizedFilename ?? modelFilename;
+                        foreach (string file in files)
+                        {
+                            string fileName = System.IO.Path.GetFileName(file);
+                            if (string.Equals(fileName, searchFilename, System.StringComparison.OrdinalIgnoreCase))
+                            {
+                                cachePath = file;
+                                break;
+                            }
+                        }
+                    }
+                    
+                    if (!File.Exists(cachePath))
+                    {
+                        UnityEngine.Debug.LogError($"NIF file not found: {cachePath} (searched for: {modelFilename}, normalized: {normalizedFilename})");
+                        return null;
+                    }
+                }
             }
 
             try
@@ -230,6 +266,7 @@ namespace ESMSharp.NIF
         private GameObject LoadNIFFromBytes(byte[] nifData, string filename, bool combineMeshes = false)
         {
             // Use niflib.net (primary loader)
+            // No fallback - if niflib.net fails, we want to see the error and fix it
             try
             {
                 return LoadNIFFromBytesNiflib(nifData, filename, combineMeshes);
@@ -251,7 +288,7 @@ namespace ESMSharp.NIF
                 
                 UnityEngine.Debug.LogError(errorDetails);
                 
-                // No fallback - return null so we can debug the issue
+                // Return null - no fallback, so we can focus on fixing niflib.net
                 return null;
             }
         }
@@ -1397,8 +1434,12 @@ namespace ESMSharp.NIF
                 foreach (var uv in shapeData.UVSets[0])
                 {
                     // niflib.net Vector2 is Unity's Vector2 when UNITY is defined
-                    // Flip V coordinate for Unity
-                    mesh.UVs.Add(new Vector2(uv.x, 1f - uv.y));
+                    // Morrowind NIF files: Testing without V flip first
+                    // If textures appear upside down, we may need to flip: V_unity = 1.0 - V_morrowind
+                    // Standard conversion: DirectX (V=0 at top) -> Unity (V=0 at bottom) requires V flip
+                    // However, if textures are already upside down with the flip, try without it first
+                    // If still upside down, restore the flip: mesh.UVs.Add(new Vector2(uv.x, 1f - uv.y));
+                    mesh.UVs.Add(new Vector2(uv.x, uv.y));
                 }
             }
             

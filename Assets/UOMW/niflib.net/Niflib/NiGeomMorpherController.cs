@@ -73,7 +73,7 @@ namespace Niflib
         /// <param name="file">The file.</param>
         /// <param name="reader">The reader.</param>
         /// <exception cref="Exception">Version too new!</exception>
-        public NiGeomMorpherController(NiFile file, BinaryReader reader) : base(file, reader)
+		public NiGeomMorpherController(NiFile file, BinaryReader reader) : base(file, reader)
 		{
 			if (base.Version >= eNifVersion.VER_10_0_1_2)
 			{
@@ -84,7 +84,20 @@ namespace Niflib
 				this.Unknown2 = reader.ReadByte();
 			}
 			this.Data = new NiRef<NiMorphData>(reader);
-			this.AlwaysUpdate = reader.ReadBoolean(Version);
+			
+			// For Morrowind (VER_4_0_0_2), alwaysUpdate is a byte, not a bool
+			// ReadBoolean() for old versions reads a uint32, which causes misalignment
+			if (base.Version < eNifVersion.VER_4_1_0_1)
+			{
+				// Morrowind and older: read as byte
+				this.AlwaysUpdate = reader.ReadByte() != 0;
+			}
+			else
+			{
+				// Newer versions: read as bool
+				this.AlwaysUpdate = reader.ReadBoolean();
+			}
+			
 			if (base.Version >= eNifVersion.VER_10_1_0_106)
 			{
 				this.NumInterpolators = reader.ReadUInt32();

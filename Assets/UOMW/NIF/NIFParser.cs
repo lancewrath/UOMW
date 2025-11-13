@@ -296,10 +296,10 @@ namespace ESMSharp.NIF
                             break;
                         }
                     }
-                    catch (Exception ex)
+                    catch (Exception)
                     {
                         // Try to recover by skipping bytes until we find a valid object type name
-                        // Disabled for performance: UnityEngine.Debug.LogWarning($"Error reading object type name at position {objStartPos} (object {i}): {ex.Message}. Attempting recovery...");
+                        // Disabled for performance: UnityEngine.Debug.LogWarning($"Error reading object type name at position {objStartPos} (object {i}). Attempting recovery...");
                         
                         long recoveryStartPos = _reader.Position;
                         bool recovered = false;
@@ -389,9 +389,9 @@ namespace ESMSharp.NIF
                             SkipUnknownObject(objData);
                         }
                     }
-                    catch (Exception ex)
+                    catch (Exception)
                     {
-                        // Disabled for performance: UnityEngine.Debug.LogWarning($"Error parsing object {i} ({objectType}): {ex.Message}");
+                        // Disabled for performance: UnityEngine.Debug.LogWarning($"Error parsing object {i} ({objectType})");
                         // Try to recover by skipping to next object
                         // This is a fallback - ideally we'd parse everything correctly
                     }
@@ -430,9 +430,9 @@ namespace ESMSharp.NIF
                     // Store root indices if needed
                 }
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                // Disabled for performance: UnityEngine.Debug.LogWarning($"Error reading root links: {ex.Message}");
+                // Disabled for performance: UnityEngine.Debug.LogWarning($"Error reading root links");
             }
         }
 
@@ -591,9 +591,9 @@ namespace ESMSharp.NIF
                     objData.Fields["skinInstanceLink"] = skinInstanceLink;
                 }
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                // Disabled for performance: UnityEngine.Debug.LogWarning($"Error parsing NiTriShape fields: {ex.Message}");
+                // Disabled for performance: UnityEngine.Debug.LogWarning($"Error parsing NiTriShape fields");
             }
         }
 
@@ -623,9 +623,9 @@ namespace ESMSharp.NIF
                     int effectLink = _reader.ReadInt32(); // Skip effect links
                 }
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                // Disabled for performance: UnityEngine.Debug.LogWarning($"Error parsing NiNode fields: {ex.Message}");
+                // Disabled for performance: UnityEngine.Debug.LogWarning($"Error parsing NiNode fields");
             }
         }
 
@@ -684,9 +684,9 @@ namespace ESMSharp.NIF
                     SkipUnknownObject(new NIFObjectData { Type = boundingVolumeType });
                 }
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                // Disabled for performance: UnityEngine.Debug.LogWarning($"Error parsing NiAVObject base fields: {ex.Message}");
+                // Disabled for performance: UnityEngine.Debug.LogWarning($"Error parsing NiAVObject base fields");
             }
         }
 
@@ -866,9 +866,9 @@ namespace ESMSharp.NIF
                 byte isStatic = _reader.ReadByte();
                 objData.Fields["isStatic"] = isStatic;
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                // Disabled for performance: UnityEngine.Debug.LogWarning($"Error parsing NiSourceTexture fields: {ex.Message}");
+                // Disabled for performance: UnityEngine.Debug.LogWarning($"Error parsing NiSourceTexture fields");
             }
         }
 
@@ -904,9 +904,9 @@ namespace ESMSharp.NIF
                 int controllerLink = _reader.ReadInt32();
                 objData.Fields["controllerLink"] = controllerLink;
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                // Disabled for performance: UnityEngine.Debug.LogWarning($"Error parsing NiObjectNET base fields: {ex.Message}");
+                // Disabled for performance: UnityEngine.Debug.LogWarning($"Error parsing NiObjectNET base fields");
             }
         }
 
@@ -930,9 +930,9 @@ namespace ESMSharp.NIF
                 byte threshold = _reader.ReadByte();
                 objData.Fields["threshold"] = threshold;
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                // Disabled for performance: UnityEngine.Debug.LogWarning($"Error parsing NiAlphaProperty fields: {ex.Message}");
+                // Disabled for performance: UnityEngine.Debug.LogWarning($"Error parsing NiAlphaProperty fields");
             }
         }
 
@@ -981,9 +981,9 @@ namespace ESMSharp.NIF
                 objData.Fields["glossiness"] = glossiness;
                 objData.Fields["alpha"] = alpha;
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                // Disabled for performance: UnityEngine.Debug.LogWarning($"Error parsing NiMaterialProperty fields: {ex.Message}");
+                // Disabled for performance: UnityEngine.Debug.LogWarning($"Error parsing NiMaterialProperty fields");
             }
         }
 
@@ -1004,9 +1004,9 @@ namespace ESMSharp.NIF
                 // This is a fallback - ideally all object types should have proper parsers
                 // Disabled for performance: UnityEngine.Debug.LogWarning($"Skipping unknown object type: {objData.Type} (only parsed base class fields)");
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                // Disabled for performance: UnityEngine.Debug.LogWarning($"Error skipping unknown object {objData.Type}: {ex.Message}");
+                // Disabled for performance: UnityEngine.Debug.LogWarning($"Error skipping unknown object {objData.Type}");
                 // If we can't parse, the file will become misaligned
                 // This is a fundamental limitation without full type definitions
             }

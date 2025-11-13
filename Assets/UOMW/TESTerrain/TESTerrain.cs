@@ -17,8 +17,6 @@ namespace ESMSharp.TES3Terrain
     public partial class TESTerrain
     {
         int MinCellX, MaxCellX, MinCellY, MaxCellY;
-        private static bool _debugXStitchingLogged = false; // Track if we've logged X-direction stitching
-        private static int _debugCellCount = 0; // Track number of cells logged for debug
         private string _esm = "";
         private string _bsa = "";
         
@@ -64,12 +62,15 @@ namespace ESMSharp.TES3Terrain
                     importer.alphaSource = TextureImporterAlphaSource.FromGrayScale;
                     // Set texture format to ETC RGB compressed to prevent shininess
                     importer.textureCompression = TextureImporterCompression.Compressed;
-                    importer.textureFormat = TextureImporterFormat.ETC_RGB4;
+                    // Use PlatformTextureSettings API instead of obsolete textureFormat
+                    TextureImporterPlatformSettings platformSettings = importer.GetPlatformTextureSettings("Android");
+                    platformSettings.format = TextureImporterFormat.ETC_RGB4;
+                    importer.SetPlatformTextureSettings(platformSettings);
                     importer.SaveAndReimport();
                     AssetDatabase.Refresh();
                 }
             }
-            catch (System.Exception ex)
+            catch (System.Exception)
             {
                 //UnityEngine.Debug.LogWarning($"Failed to set texture import settings for {texturePath}: {ex.Message}");
             }
@@ -522,9 +523,9 @@ namespace ESMSharp.TES3Terrain
                                             UnityEngine.Object.DestroyImmediate(tempTexture);
                                         }
                                     }
-                                    catch (System.Exception ex)
+                                    catch (System.Exception)
                                     {
-                                        //UnityEngine.Debug.LogWarning($"Failed to convert cached {ext} to PNG: {ex.Message}");
+                                        //UnityEngine.Debug.LogWarning($"Failed to convert cached {ext} to PNG");
                                     }
                                 }
                                 else
@@ -1886,7 +1887,7 @@ namespace ESMSharp.TES3Terrain
                             foreach (string ext in extensions)
                             {
                                 string searchFilename = baseNameNoExt + ext;
-                                UnityEngine.Debug.Log($"[VTEX {vtexIndex}] Searching for: {searchFilename}");
+                                //UnityEngine.Debug.Log($"[VTEX {vtexIndex}] Searching for: {searchFilename}");
                                 
                                 foreach (string file in files)
                                 {
@@ -1896,7 +1897,7 @@ namespace ESMSharp.TES3Terrain
                                     {
                                         texturePath = file;
                                         foundBaseName = fileName;
-                                        UnityEngine.Debug.Log($"[VTEX {vtexIndex}] ✓ Found: {fileName}");
+                                        //UnityEngine.Debug.Log($"[VTEX {vtexIndex}] ✓ Found: {fileName}");
                                         break;
                                     }
                                 }
@@ -1928,7 +1929,7 @@ namespace ESMSharp.TES3Terrain
                                     {
                                         texturePath = file;
                                         foundBaseName = fileName;
-                                        UnityEngine.Debug.Log($"[VTEX {vtexIndex}] ✓ Found via fuzzy match: {fileName}");
+                                        //UnityEngine.Debug.Log($"[VTEX {vtexIndex}] ✓ Found via fuzzy match: {fileName}");
                                         break;
                                     }
                                 }
@@ -2176,7 +2177,7 @@ namespace ESMSharp.TES3Terrain
                                     texture.Apply(false, false);
                                     #endif
 
-                                    UnityEngine.Debug.Log($"Loaded texture layer {terrainLayers.Count}: {foundBaseName ?? System.IO.Path.GetFileName(texturePath)} ({texture.width}x{texture.height})");
+                                    //UnityEngine.Debug.Log($"Loaded texture layer {terrainLayers.Count}: {foundBaseName ?? System.IO.Path.GetFileName(texturePath)} ({texture.width}x{texture.height})");
                                     
                                     // Set import settings to disable alpha source (prevents shininess)
                                     #if UNITY_EDITOR
@@ -2517,113 +2518,122 @@ namespace ESMSharp.TES3Terrain
             // Find water and foam textures from LTEX records
             var (waterTexture, waterNormalMap, foamTexture) = FindWaterTextures(_records, esm);
             
-            // Try Lux URP/Water shader first, then fallback to other URP shaders
-            Shader waterShader = Shader.Find("Lux URP/Water");
-            if (waterShader == null)
+            // Try to load TESWater material asset first
+            Material waterMaterial = null;
+            Material tesWaterAsset = Resources.Load<Material>("TESWater");
+            if (tesWaterAsset != null)
             {
-                waterShader = Shader.Find("Universal Render Pipeline/Lit");
+                // Create instance of the material asset
+                waterMaterial = new Material(tesWaterAsset);
+                UnityEngine.Debug.Log("Loaded TESWater material from Resources");
             }
-            if (waterShader == null)
+            else
             {
-                waterShader = Shader.Find("Universal Render Pipeline/Simple Lit");
-            }
-            if (waterShader == null)
-            {
-                waterShader = Shader.Find("Universal Render Pipeline/Unlit");
-            }
-            if (waterShader == null)
-            {
-                // Fallback to Standard shader if URP shaders not found
-                waterShader = Shader.Find("Standard");
-            }
-            
-            Material waterMaterial = new Material(waterShader);
-            
-            // Set up water material based on shader type
-            if (waterShader.name.Contains("Lux URP/Water"))
-            {
-                // Lux URP/Water shader setup
-                // Surface Options
-                if (waterMaterial.HasProperty("_ZWrite"))
-                    waterMaterial.SetFloat("_ZWrite", 1.0f);
-                if (waterMaterial.HasProperty("_ZTest"))
-                    waterMaterial.SetFloat("_ZTest", 4.0f); // LessEqual
-                if (waterMaterial.HasProperty("_DstBlend"))
-                    waterMaterial.SetFloat("_DstBlend", 0.0f);
-                if (waterMaterial.HasProperty("_ReceiveShadows"))
-                    waterMaterial.SetFloat("_ReceiveShadows", 1.0f);
-                
-                // Surface Inputs - Normal Map
-                if (waterNormalMap != null && waterMaterial.HasProperty("_BumpMap"))
+                // Try to find TESWater shader and create material
+                Shader waterShader = Shader.Find("Shader Graphs/TESWater");
+                if (waterShader == null)
                 {
-                    waterMaterial.SetTexture("_BumpMap", waterNormalMap);
-                    if (waterMaterial.HasProperty("_BumpScale"))
-                        waterMaterial.SetFloat("_BumpScale", 1.0f);
+                    // Fallback to URP shaders if TESWater not found
+                    waterShader = Shader.Find("Universal Render Pipeline/Lit");
+                    if (waterShader == null)
+                    {
+                        waterShader = Shader.Find("Universal Render Pipeline/Simple Lit");
+                    }
+                    if (waterShader == null)
+                    {
+                        waterShader = Shader.Find("Universal Render Pipeline/Unlit");
+                    }
+                    if (waterShader == null)
+                    {
+                        waterShader = Shader.Find("Standard");
+                    }
                 }
                 
-                // Speed/Animation
+                if (waterShader != null)
+                {
+                    waterMaterial = new Material(waterShader);
+                    UnityEngine.Debug.Log($"Created water material using shader: {waterShader.name}");
+                }
+                else
+                {
+                    UnityEngine.Debug.LogError("Could not find TESWater shader or any fallback shader for water material");
+                    return;
+                }
+            }
+            
+            // Set up TESWater material properties
+            if (waterMaterial.shader.name.Contains("TESWater") || waterMaterial.shader.name.Contains("Shader Graphs/TESWater"))
+            {
+                // TESWater shader setup
+                // Normal maps
+                if (waterNormalMap != null && waterMaterial.HasProperty("_Normal"))
+                {
+                    waterMaterial.SetTexture("_Normal", waterNormalMap);
+                }
+                if (waterNormalMap != null && waterMaterial.HasProperty("_NormalB"))
+                {
+                    waterMaterial.SetTexture("_NormalB", waterNormalMap);
+                }
+                if (waterMaterial.HasProperty("_NormalStrength"))
+                {
+                    waterMaterial.SetFloat("_NormalStrength", 0.277f);
+                }
+                
+                // Animation/Speed
                 if (waterMaterial.HasProperty("_Speed"))
-                    waterMaterial.SetVector("_Speed", new Vector4(0.1f, 0f, 0f, 0f));
-                if (waterMaterial.HasProperty("_SecondaryTilingSpeedRefractBump"))
-                    waterMaterial.SetVector("_SecondaryTilingSpeedRefractBump", new Vector4(2f, 2.3f, 0.1f, 1f));
+                {
+                    waterMaterial.SetFloat("_Speed", 2.02f);
+                }
                 
-                // Smoothness and Specular
+                // Water colors
+                if (waterMaterial.HasProperty("_ShallowWaterColor"))
+                {
+                    waterMaterial.SetColor("_ShallowWaterColor", new Color(0.14771953f, 0.45471424f, 0.48427665f, 0f));
+                }
+                if (waterMaterial.HasProperty("_DeepWaterColor"))
+                {
+                    waterMaterial.SetColor("_DeepWaterColor", new Color(0.070705205f, 0.2934088f, 0.408805f, 1f));
+                }
+                
+                // Tiling
+                if (waterMaterial.HasProperty("_Tiling"))
+                {
+                    waterMaterial.SetVector("_Tiling", new Vector4(3000f, 3000f, 0f, 0f));
+                }
+                if (waterMaterial.HasProperty("_TilingB"))
+                {
+                    waterMaterial.SetVector("_TilingB", new Vector4(1000f, 1000f, 0f, 0f));
+                }
+                
+                // Depth and strength
+                if (waterMaterial.HasProperty("_Depth"))
+                {
+                    waterMaterial.SetFloat("_Depth", 0.03f);
+                }
+                if (waterMaterial.HasProperty("_Strength"))
+                {
+                    waterMaterial.SetFloat("_Strength", 0.984f);
+                }
+                
+                // Smoothness
                 if (waterMaterial.HasProperty("_Smoothness"))
-                    waterMaterial.SetFloat("_Smoothness", 0.824f);
-                if (waterMaterial.HasProperty("_SpecColor"))
-                    waterMaterial.SetColor("_SpecColor", new Color(0.2f, 0.2f, 0.2f, 1f));
-                if (waterMaterial.HasProperty("_EdgeBlend"))
-                    waterMaterial.SetFloat("_EdgeBlend", 1.74f);
+                {
+                    waterMaterial.SetFloat("_Smoothness", 1.0f);
+                }
                 
-                // Refraction
-                if (waterMaterial.HasProperty("_EnableRefraction"))
-                    waterMaterial.SetFloat("_EnableRefraction", 1.0f);
-                if (waterMaterial.HasProperty("_Refraction"))
-                    waterMaterial.SetFloat("_Refraction", 0.215f);
-                if (waterMaterial.HasProperty("_ReflectionBumpScale"))
-                    waterMaterial.SetFloat("_ReflectionBumpScale", 0.881f);
-                
-                // Underwater Fog
+                // Base color
+                if (waterMaterial.HasProperty("_BaseColor"))
+                {
+                    waterMaterial.SetColor("_BaseColor", Color.white);
+                }
                 if (waterMaterial.HasProperty("_Color"))
-                    waterMaterial.SetColor("_Color", new Color(0.1932627f, 0.2954881f, 0.4056604f, 1f));
-                if (waterMaterial.HasProperty("_Density"))
-                    waterMaterial.SetFloat("_Density", 0.05f);
-                if (waterMaterial.HasProperty("_DiffuseNormalUp"))
-                    waterMaterial.SetFloat("_DiffuseNormalUp", 0.391f);
-                
-                // Foam
-                if (waterMaterial.HasProperty("_Foam"))
                 {
-                    waterMaterial.SetFloat("_Foam", 0.0f); // Disable foam
-                }
-                if (foamTexture != null && waterMaterial.HasProperty("_FoamMap"))
-                {
-                    waterMaterial.SetTexture("_FoamMap", foamTexture);
-                    if (waterMaterial.HasProperty("_FoamTiling"))
-                        waterMaterial.SetFloat("_FoamTiling", 2.0f);
-                    if (waterMaterial.HasProperty("_FoamSpeed"))
-                        waterMaterial.SetVector("_FoamSpeed", new Vector4(0.1f, 0f, 0f, 0f));
-                    if (waterMaterial.HasProperty("_FoamScale"))
-                        waterMaterial.SetFloat("_FoamScale", 4.0f);
-                    if (waterMaterial.HasProperty("_FoamSoftIntersectionFactor"))
-                        waterMaterial.SetFloat("_FoamSoftIntersectionFactor", 0.5f);
-                    if (waterMaterial.HasProperty("_FoamSlopStrength"))
-                        waterMaterial.SetFloat("_FoamSlopStrength", 0.85f);
-                    if (waterMaterial.HasProperty("_FoamSmoothness"))
-                        waterMaterial.SetFloat("_FoamSmoothness", 0.3f);
-                    if (waterMaterial.HasProperty("_AddFoamFromNormal"))
-                        waterMaterial.SetFloat("_AddFoamFromNormal", 4.0f);
+                    waterMaterial.SetColor("_Color", Color.white);
                 }
                 
-                // Advanced
-                if (waterMaterial.HasProperty("_SpecularHighlights"))
-                    waterMaterial.SetFloat("_SpecularHighlights", 1.0f);
-                if (waterMaterial.HasProperty("_EnvironmentReflections"))
-                    waterMaterial.SetFloat("_EnvironmentReflections", 1.0f);
-                
-                UnityEngine.Debug.Log($"Applied Lux URP/Water shader with water texture: {(waterTexture != null ? "Yes" : "No")}, normal map: {(waterNormalMap != null ? "Yes" : "No")}, foam: {(foamTexture != null ? "Yes" : "No")}");
+                UnityEngine.Debug.Log($"Applied TESWater shader with water texture: {(waterTexture != null ? "Yes" : "No")}, normal map: {(waterNormalMap != null ? "Yes" : "No")}, foam: {(foamTexture != null ? "Yes" : "No")}");
             }
-            else if (waterShader.name.Contains("Universal Render Pipeline"))
+            else if (waterMaterial.shader.name.Contains("Universal Render Pipeline"))
             {
                 // URP shader setup (fallback)
                 waterMaterial.SetFloat("_Surface", 1); // Transparent surface
@@ -3670,8 +3680,6 @@ namespace ESMSharp.TES3Terrain
             }
             
             const int CELL = 65;
-            const int STEP = 65;
-            const int HALF = CELL / 2;
             // Use global constant from TESGlobals
             
             int cx = width / 2;

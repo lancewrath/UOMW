@@ -127,7 +127,10 @@ namespace Niflib
         public NiFile(BinaryReader reader)
 		{
 			this.Header = new NiHeader(this, reader);
+			long positionBeforeObjects = reader.BaseStream.Position;
 			this.ReadNiObjects(reader);
+			long positionAfterObjects = reader.BaseStream.Position;
+			//UnityEngine.Debug.Log($"niflib.net: Read {this.ObjectsByRef.Count} objects. Header.NumBlocks = {this.Header.NumBlocks}. Position before objects: {positionBeforeObjects}, after: {positionAfterObjects}");
 			this.Footer = new NiFooter(this, reader);
 			this.FixRefs();
 		}
@@ -149,6 +152,23 @@ namespace Niflib
 			string text;
 			while (true)
 			{
+				// For versions >= 0x0303000D (like Morrowind 4.0.0.2), check if we've read all blocks BEFORE trying to read another
+				// This prevents reading past the end of the objects list
+				if (this.Version >= eNifVersion.VER_3_3_0_13 && this.Version < eNifVersion.VER_5_0_0_1)
+				{
+					if ((long)num >= (long)((ulong)this.Header.NumBlocks))
+					{
+						// We've read all blocks, stop reading
+						//UnityEngine.Debug.Log($"niflib.net: Read all {this.Header.NumBlocks} objects. Stopping read at position {reader.BaseStream.Position}.");
+						return;
+					}
+					// Debug: Log when we're about to read objects near the end
+					//if ((long)num >= (long)((ulong)this.Header.NumBlocks) - 2)
+					//{
+					//	UnityEngine.Debug.Log($"niflib.net: About to read object {num + 1} of {this.Header.NumBlocks} at position {reader.BaseStream.Position}");
+					//}
+				}
+				
 				if (this.Version >= eNifVersion.VER_5_0_0_1)
 				{
 					if (this.Version <= eNifVersion.VER_10_1_0_106 && reader.ReadUInt32() != 0u)
@@ -159,11 +179,57 @@ namespace Niflib
 				}
 				else
 				{
+					long positionBeforeRead = reader.BaseStream.Position;
 					uint num2 = reader.ReadUInt32();
-					if (num2 > 30u || num2 < 6u)
+					
+					// Check if this looks like ASCII text (common object type names start with 'N' = 0x4E)
+					// If the high byte is 0x4D-0x5A (M-Z in ASCII), it's probably not a length but actual data
+					// This happens when we've read past the end of the objects list
+					byte highByte = (byte)((num2 >> 24) & 0xFF);
+					if (highByte >= 0x4D && highByte <= 0x5A) // 'M' to 'Z' in ASCII
 					{
+						// This looks like ASCII text, not a length - we've probably read all objects
+						// Convert the uint32 to ASCII to see what we're reading
+						byte[] bytes = BitConverter.GetBytes(num2);
+						string asciiText = System.Text.Encoding.ASCII.GetString(bytes);
+						UnityEngine.Debug.LogWarning($"niflib.net: Read ASCII-like value at position {positionBeforeRead}: {num2} (0x{num2:X8}) = '{asciiText}'. Expected {this.Header.NumBlocks} objects but read {num}. This suggests we've read past the end. Seeking back and stopping.");
+						
+						// Seek back 4 bytes since we read past the end
+						reader.BaseStream.Position = positionBeforeRead;
+						
+						// For versions >= 0x0303000D, we should have already checked NumBlocks above
+						// But if we get here, it means the NumBlocks count might be wrong or we miscounted
+						if (this.Version >= eNifVersion.VER_3_3_0_13)
+						{
+							return; // Stop reading - we've read all objects (or as many as we can)
+						}
+					}
+					
+					// More lenient check: allow 0-1024 characters instead of strict 6-30
+					// Some Morrowind NIF files have object type names outside the expected range
+					// This matches OpenMW's more lenient approach
+					// Also check for obviously invalid values that suggest file misalignment
+					if (num2 > 1024u)
+					{
+						// Log the value we read to help debug
+						UnityEngine.Debug.LogError($"niflib.net: Invalid object type string length: {num2} (0x{num2:X8}) at position {positionBeforeRead}. File may be misaligned or corrupted. Expected {this.Header.NumBlocks} objects, read {num}.");
 						goto IL_74;
 					}
+					
+					// Allow empty strings (0 length) - some files may have padding or special markers
+					if (num2 == 0u)
+					{
+						// Skip this object and continue - might be padding or alignment
+						continue;
+					}
+					
+					// Additional check: if length is very small (< 3), it's probably not a valid object type name
+					// But we'll still try to read it to see what we get
+					if (num2 < 3u)
+					{
+						UnityEngine.Debug.LogWarning($"niflib.net: Suspiciously short object type string length: {num2} (at position {positionBeforeRead}). Attempting to read anyway...");
+					}
+					
 					text = new string(reader.ReadChars((int)num2));
 					if (this.Header.Version < eNifVersion.VER_3_3_0_13)
 					{
@@ -189,18 +255,46 @@ namespace Niflib
 				Type expr_E7 = Type.GetType("Niflib." + text);
 				if (expr_E7 == null)
 				{
+					// Log unknown object type
+					UnityEngine.Debug.LogWarning($"niflib.net: Unknown object type '{text}' at position {reader.BaseStream.Position - 4 - text.Length}. Expected {this.Header.NumBlocks} objects, read {num} so far. Cannot skip unknown objects safely, so stopping read.");
+					
+					// For unknown types, we can't continue safely because we don't know the object size
+					// But we should still increment num to match the expected count
+					// However, this will cause issues with references, so we throw
 					goto Block_8;
 				}
-				NiObject value = (NiObject)Activator.CreateInstance(expr_E7, new object[]
+				
+				NiObject value = null;
+				long positionBeforeObject = reader.BaseStream.Position;
+				try
 				{
-					this,
-					reader
-				});
+					//UnityEngine.Debug.Log($"niflib.net: Reading object {num + 1} of {this.Header.NumBlocks}: type='{text}', key={key}, position={positionBeforeObject}");
+					value = (NiObject)Activator.CreateInstance(expr_E7, new object[]
+					{
+						this,
+						reader
+					});
+					long positionAfterObject = reader.BaseStream.Position;
+					//UnityEngine.Debug.Log($"niflib.net: Successfully read object {num + 1} of {this.Header.NumBlocks}: '{text}' (key={key}) from position {positionBeforeObject} to {positionAfterObject} (size: {positionAfterObject - positionBeforeObject} bytes)");
+				}
+				catch (System.Exception ex)
+				{
+					// Object creation failed - this is a serious error
+					long positionAfterError = reader.BaseStream.Position;
+					UnityEngine.Debug.LogError($"niflib.net: Failed to create instance of '{text}' (object {num + 1} of {this.Header.NumBlocks}) at position {positionBeforeObject}. Error: {ex.Message}. Position after error: {positionAfterError}. Inner exception: {(ex.InnerException != null ? ex.InnerException.Message : "none")}. Stack trace: {ex.StackTrace}");
+					
+					// Can't continue safely - the file position is now wrong
+					// Re-throw to stop parsing
+					throw new System.Exception($"Failed to create object of type '{text}' at position {positionBeforeObject}: {ex.Message}", ex);
+				}
+				
 				this.ObjectsByRef.Add(key, value);
 				if (this.Version >= eNifVersion.VER_3_3_0_13)
 				{
 					num++;
-					if ((long)num >= (long)((ulong)this.Header.NumBlocks))
+					// Check again after incrementing (for versions < 5.0.0.1, we already checked at the start of the loop)
+					// But keep this check for safety
+					if (this.Version < eNifVersion.VER_5_0_0_1 && (long)num >= (long)((ulong)this.Header.NumBlocks))
 					{
 						return;
 					}

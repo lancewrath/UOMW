@@ -22,7 +22,6 @@ namespace ESMSharp.TES3Terrain
         private Dictionary<string, TreePrototype> _treePrototypes = new Dictionary<string, TreePrototype>(StringComparer.OrdinalIgnoreCase);
         private List<TreeInstance> _treeInstances = new List<TreeInstance>();
         private BSA _bsaArchive = null;
-        private Record[] _allRecords = null; // Store all records for VHGT lookup
 
         // Distance-based LOD configuration (based on MWGE distant lands algorithm)
         // These values determine which quadtree/distance category objects are placed in
@@ -304,6 +303,7 @@ namespace ESMSharp.TES3Terrain
             SubRecordCellFRMR currentFRMR = null;
             SubRecordCellREFP currentREFP = null;
             SubRecordCellObjectID currentObjectID = null;
+            SubRecordCellANAM currentANAM = null; // NPC ID (if this reference is an NPC)
             float currentScale = 1.0f;
             bool seenFirstDATA = false;
 
@@ -313,6 +313,8 @@ namespace ESMSharp.TES3Terrain
             int failedGrassCount = 0;
             int placedStructuresCount = 0;
             int failedStructuresCount = 0;
+            int placedNPCsCount = 0;
+            int failedNPCsCount = 0;
 
             foreach (SubRecords subrec in cellRecord.subRecords)
             {
@@ -328,18 +330,62 @@ namespace ESMSharp.TES3Terrain
                 {
                     if (currentObjectID != null && currentREFP != null)
                     {
-                        // Place trees
-                        PlaceReference(currentObjectID, currentREFP, currentScale, statRecordsByName, cellParent, cellGridX, cellGridY, ObjectType.Trees, terrain, parent, ref placedTreesCount, ref failedTreesCount, allRecords);
+                        bool placedAsNPC = false;
                         
-                        // Place grass
-                        PlaceReference(currentObjectID, currentREFP, currentScale, statRecordsByName, cellParent, cellGridX, cellGridY, ObjectType.Grass, terrain, parent, ref placedGrassCount, ref failedGrassCount, allRecords);
+                        // Check if this is an NPC reference (has ANAM)
+                        if (currentANAM != null && !string.IsNullOrEmpty(currentANAM.name))
+                        {
+                            // Clean ANAM name before using it
+                            string cleanedANAM = currentANAM.name.TrimEnd('\0', ' ', '\t', '\r', '\n');
+                            cleanedANAM = cleanedANAM.Replace("\0", "");
+                            cleanedANAM = new string(cleanedANAM.Where(c => c != '\0').ToArray()).Trim();
+                            if (!string.IsNullOrEmpty(cleanedANAM))
+                            {
+                                // Place NPC
+                                PlaceNPC(cleanedANAM, currentREFP, currentScale, cellParent, cellGridX, cellGridY, ref placedNPCsCount, ref failedNPCsCount);
+                                placedAsNPC = true;
+                            }
+                        }
                         
-                        // Place large structures
-                        PlaceReference(currentObjectID, currentREFP, currentScale, statRecordsByName, cellParent, cellGridX, cellGridY, ObjectType.LargeStructures, terrain, parent, ref placedStructuresCount, ref failedStructuresCount, allRecords);
+                        // If not placed as NPC yet, check if Object ID might be an NPC name (fallback detection)
+                        // This handles cases where ANAM might be missing or in wrong order
+                        if (!placedAsNPC)
+                        {
+                            string objectIdClean = currentObjectID.objectId?.TrimEnd('\0', ' ', '\t', '\r', '\n')?.Replace("\0", "");
+                            if (!string.IsNullOrEmpty(objectIdClean))
+                            {
+                                objectIdClean = new string(objectIdClean.Where(c => c != '\0').ToArray()).Trim();
+                                if (!string.IsNullOrEmpty(objectIdClean))
+                                {
+                                    TESCharacterManager.NPCEntry npcEntry = TESCharacterManager.GetNPC(objectIdClean);
+                                    if (npcEntry != null)
+                                    {
+                                        // This is an NPC but ANAM wasn't detected - log and place as NPC anyway
+                                        UnityEngine.Debug.LogWarning($"PlaceCellStatics: NPC '{objectIdClean}' detected by Object ID but ANAM was missing. Placing as NPC anyway.");
+                                        PlaceNPC(objectIdClean, currentREFP, currentScale, cellParent, cellGridX, cellGridY, ref placedNPCsCount, ref failedNPCsCount);
+                                        placedAsNPC = true;
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // If still not placed as NPC, place as static objects
+                        if (!placedAsNPC)
+                        {
+                            // Place trees
+                            PlaceReference(currentObjectID, currentREFP, currentScale, statRecordsByName, cellParent, cellGridX, cellGridY, ObjectType.Trees, terrain, parent, ref placedTreesCount, ref failedTreesCount, allRecords);
+                            
+                            // Place grass
+                            PlaceReference(currentObjectID, currentREFP, currentScale, statRecordsByName, cellParent, cellGridX, cellGridY, ObjectType.Grass, terrain, parent, ref placedGrassCount, ref failedGrassCount, allRecords);
+                            
+                            // Place large structures
+                            PlaceReference(currentObjectID, currentREFP, currentScale, statRecordsByName, cellParent, cellGridX, cellGridY, ObjectType.LargeStructures, terrain, parent, ref placedStructuresCount, ref failedStructuresCount, allRecords);
+                        }
                     }
                     currentFRMR = subrec as SubRecordCellFRMR;
                     currentREFP = null;
                     currentObjectID = null;
+                    currentANAM = null;
                     currentScale = 1.0f;
                 }
                 else if (subrec is SubRecordCellObjectID)
@@ -349,6 +395,27 @@ namespace ESMSharp.TES3Terrain
                 else if (subrec is SubRecordCellREFP)
                 {
                     currentREFP = subrec as SubRecordCellREFP;
+                }
+                else if (subrec is SubRecordCellANAM)
+                {
+                    // ANAM indicates this reference is an NPC
+                    currentANAM = subrec as SubRecordCellANAM;
+                    // Clean ANAM name to remove null characters
+                    if (currentANAM != null && !string.IsNullOrEmpty(currentANAM.name))
+                    {
+                        // Remove null characters from ANAM name
+                        string cleanedANAM = currentANAM.name.TrimEnd('\0', ' ', '\t', '\r', '\n');
+                        cleanedANAM = cleanedANAM.Replace("\0", "");
+                        cleanedANAM = new string(cleanedANAM.Where(c => c != '\0').ToArray()).Trim();
+                        // Create a new SubRecordCellANAM with cleaned name (or update the existing one if possible)
+                        // For now, we'll clean it when we use it in PlaceNPC
+                        // Debug: Log ANAM content to help diagnose NPC detection issues
+                        UnityEngine.Debug.Log($"PlaceCellStatics: Found ANAM record with NPC ID: '{currentANAM.name}' (cleaned: '{cleanedANAM}') (Object ID: '{currentObjectID?.objectId ?? "null"}')");
+                    }
+                    else if (currentANAM != null)
+                    {
+                        UnityEngine.Debug.LogWarning($"PlaceCellStatics: Found ANAM record but it is null or empty (Object ID: '{currentObjectID?.objectId ?? "null"}')");
+                    }
                 }
                 else if (subrec is SubRecordCellXSCL xscal)
                 {
@@ -364,14 +431,57 @@ namespace ESMSharp.TES3Terrain
 
             if (currentObjectID != null && currentREFP != null)
             {
-                // Place trees
-                PlaceReference(currentObjectID, currentREFP, currentScale, statRecordsByName, cellParent, cellGridX, cellGridY, ObjectType.Trees, terrain, parent, ref placedTreesCount, ref failedTreesCount, allRecords);
+                bool placedAsNPC = false;
                 
-                // Place grass
-                PlaceReference(currentObjectID, currentREFP, currentScale, statRecordsByName, cellParent, cellGridX, cellGridY, ObjectType.Grass, terrain, parent, ref placedGrassCount, ref failedGrassCount, allRecords);
+                // Check if this is an NPC reference (has ANAM)
+                if (currentANAM != null && !string.IsNullOrEmpty(currentANAM.name))
+                {
+                    // Clean ANAM name before using it
+                    string cleanedANAM = currentANAM.name.TrimEnd('\0', ' ', '\t', '\r', '\n');
+                    cleanedANAM = cleanedANAM.Replace("\0", "");
+                    cleanedANAM = new string(cleanedANAM.Where(c => c != '\0').ToArray()).Trim();
+                    if (!string.IsNullOrEmpty(cleanedANAM))
+                    {
+                        // Place NPC
+                        PlaceNPC(cleanedANAM, currentREFP, currentScale, cellParent, cellGridX, cellGridY, ref placedNPCsCount, ref failedNPCsCount);
+                        placedAsNPC = true;
+                    }
+                }
                 
-                // Place large structures
-                PlaceReference(currentObjectID, currentREFP, currentScale, statRecordsByName, cellParent, cellGridX, cellGridY, ObjectType.LargeStructures, terrain, parent, ref placedStructuresCount, ref failedStructuresCount, allRecords);
+                // If not placed as NPC yet, check if Object ID might be an NPC name (fallback detection)
+                // This handles cases where ANAM might be missing or in wrong order
+                if (!placedAsNPC)
+                {
+                    string objectIdClean = currentObjectID.objectId?.TrimEnd('\0', ' ', '\t', '\r', '\n')?.Replace("\0", "");
+                    if (!string.IsNullOrEmpty(objectIdClean))
+                    {
+                        objectIdClean = new string(objectIdClean.Where(c => c != '\0').ToArray()).Trim();
+                        if (!string.IsNullOrEmpty(objectIdClean))
+                        {
+                            TESCharacterManager.NPCEntry npcEntry = TESCharacterManager.GetNPC(objectIdClean);
+                            if (npcEntry != null)
+                            {
+                                // This is an NPC but ANAM wasn't detected - log and place as NPC anyway
+                                UnityEngine.Debug.LogWarning($"PlaceCellStatics: NPC '{objectIdClean}' detected by Object ID but ANAM was missing. Placing as NPC anyway.");
+                                PlaceNPC(objectIdClean, currentREFP, currentScale, cellParent, cellGridX, cellGridY, ref placedNPCsCount, ref failedNPCsCount);
+                                placedAsNPC = true;
+                            }
+                        }
+                    }
+                }
+                
+                // If still not placed as NPC, place as static objects
+                if (!placedAsNPC)
+                {
+                    // Place trees
+                    PlaceReference(currentObjectID, currentREFP, currentScale, statRecordsByName, cellParent, cellGridX, cellGridY, ObjectType.Trees, terrain, parent, ref placedTreesCount, ref failedTreesCount, allRecords);
+                    
+                    // Place grass
+                    PlaceReference(currentObjectID, currentREFP, currentScale, statRecordsByName, cellParent, cellGridX, cellGridY, ObjectType.Grass, terrain, parent, ref placedGrassCount, ref failedGrassCount, allRecords);
+                    
+                    // Place large structures
+                    PlaceReference(currentObjectID, currentREFP, currentScale, statRecordsByName, cellParent, cellGridX, cellGridY, ObjectType.LargeStructures, terrain, parent, ref placedStructuresCount, ref failedStructuresCount, allRecords);
+                }
             }
 
             //UnityEngine.Debug.Log($"TESCell ({cellGridX}, {cellGridY}): Placed {placedTreesCount} trees ({failedTreesCount} failed), {placedGrassCount} grass ({failedGrassCount} failed), {placedStructuresCount} structures ({failedStructuresCount} failed)");
@@ -530,6 +640,8 @@ namespace ESMSharp.TES3Terrain
 
                 // Process references in this cell
                 // CELL reference structure: FRMR -> NAME (cell name) -> NAME (Object ID/model ID) -> DATA (REFP) -> XSCL (optional)
+                // Note: ANAM (NPC ID) is ignored here - this method is for distant visual objects only
+                // NPCs are handled in PlaceCellStatics() instead
                 // We need to track these in sequence
                 SubRecordCellFRMR currentFRMR = null;
                 SubRecordCellREFP currentREFP = null;
@@ -568,6 +680,7 @@ namespace ESMSharp.TES3Terrain
                         // If we have a complete previous reference, place it first
                         if (currentObjectID != null && currentREFP != null)
                         {
+                            // Place static object (NPCs are skipped in this method - for distant visuals only)
                             PlaceReference(currentObjectID, currentREFP, currentScale, statRecordsByName, cellParent, cellGridX, cellGridY, objectType, terrain, parent, ref placedCount, ref failedCount);
                         }
                         
@@ -586,6 +699,7 @@ namespace ESMSharp.TES3Terrain
                     {
                         currentREFP = subrec as SubRecordCellREFP;
                     }
+                    // Note: ANAM (NPC ID) is intentionally ignored here - this method is for distant visual objects only
                     else if (subrec is SubRecordCellXSCL xscal)
                     {
                         // XSCL contains the object scale
@@ -596,6 +710,7 @@ namespace ESMSharp.TES3Terrain
                 // Place the last reference if we have one
                 if (currentObjectID != null && currentREFP != null)
                 {
+                    // Place static object (NPCs are skipped in this method - for distant visuals only)
                     PlaceReference(currentObjectID, currentREFP, currentScale, statRecordsByName, cellParent, cellGridX, cellGridY, objectType, terrain, parent, ref placedCount, ref failedCount);
                 }
 
@@ -1086,6 +1201,32 @@ namespace ESMSharp.TES3Terrain
             modelId = modelId.Replace("\0", "");
             modelId = modelId.Trim();
 
+            // Check if this might be an NPC (quick check - if it's not in STAT records)
+            // This is a performance optimization to avoid checking NPCs for every static
+            // Also clean the modelId to remove null characters before checking
+            string cleanedModelId = new string(modelId.Where(c => c != '\0').ToArray()).Trim();
+            bool mightBeNPC = !statRecordsByName.ContainsKey(modelId) && !statRecordsByName.ContainsKey(cleanedModelId);
+            
+            // If it might be an NPC, check TESCharacterManager before trying STAT lookup
+            if (mightBeNPC)
+            {
+                // Try both the original and cleaned version
+                TESCharacterManager.NPCEntry npcEntry = TESCharacterManager.GetNPC(modelId);
+                if (npcEntry == null && !string.Equals(modelId, cleanedModelId, StringComparison.OrdinalIgnoreCase))
+                {
+                    npcEntry = TESCharacterManager.GetNPC(cleanedModelId);
+                }
+                
+                if (npcEntry != null)
+                {
+                    // This is an NPC, but we don't have ANAM in this context
+                    // Log debug info to help diagnose
+                    UnityEngine.Debug.LogWarning($"PlaceReference: Found NPC '{modelId}' (cleaned: '{cleanedModelId}') but ANAM was not detected. This reference should have been handled by PlaceNPC(). Object ID: '{objectId.objectId}'");
+                    failedCount++;
+                    return;
+                }
+            }
+
             string modelFilename = null;
 
             // First, try to look up STAT record by name
@@ -1291,7 +1432,6 @@ namespace ESMSharp.TES3Terrain
             {
                 // Try to get the mesh bounds from a loaded model
                 string baseFilename = Path.GetFileName(modelFilename);
-                GameObject model = null;
 
                 // Check if already loaded in global library
                 string baseFilenameNoExt = Path.GetFileNameWithoutExtension(baseFilename);
@@ -1815,6 +1955,419 @@ namespace ESMSharp.TES3Terrain
             //         // Create LOD Group and assign meshes...
             //     }
             // }
+        }
+
+        /// <summary>
+        /// Places an NPC character in the world at the specified cell reference position
+        /// TODO: Implement skinned mesh handling and humanoid rig mapping for Mechanim compatibility
+        /// TODO: Account for handedness conversion (Morrowind right-handed to Unity left-handed coordinate system)
+        /// Reference: OpenMW source for skinned mesh handling (components/nif/nifloader.cpp, components/scene/skinned.cpp)
+        /// </summary>
+        private bool PlaceNPC(string npcId, SubRecordCellREFP refp, float scale, GameObject cellParent, int cellGridX, int cellGridY, ref int placedCount, ref int failedCount)
+        {
+            try
+            {
+                // Clean NPC ID - remove all null characters and whitespace
+                npcId = npcId?.TrimEnd('\0', ' ', '\t', '\r', '\n');
+                npcId = npcId?.Replace("\0", "");
+                npcId = npcId?.Trim();
+                
+                // Also remove any embedded null characters
+                if (!string.IsNullOrEmpty(npcId))
+                {
+                    npcId = new string(npcId.Where(c => c != '\0').ToArray()).Trim();
+                }
+
+                if (string.IsNullOrEmpty(npcId))
+                {
+                    UnityEngine.Debug.LogWarning("PlaceNPC: NPC ID is null or empty");
+                    failedCount++;
+                    return false;
+                }
+
+                // Get NPC data from TESCharacterManager (lookup is case-insensitive)
+                TESCharacterManager.NPCEntry npcEntry = TESCharacterManager.GetNPC(npcId);
+                if (npcEntry == null)
+                {
+                    UnityEngine.Debug.LogWarning($"PlaceNPC: NPC '{npcId}' not found in TESCharacterManager");
+                    failedCount++;
+                    return false;
+                }
+
+                // NPC_ records reference BODY records for actual model filenames
+                // MODL = body part ID (not direct filename)
+                // BNAM = head body part ID
+                // KNAM = hair body part ID
+                // We need to look up each body part to get the actual model filename
+                
+                // Get body part entries for body, head, and hair
+                TESCharacterManager.BodyPartEntry bodyPart = null;
+                TESCharacterManager.BodyPartEntry headPart = null;
+                TESCharacterManager.BodyPartEntry hairPart = null;
+                
+                if (!string.IsNullOrEmpty(npcEntry.ModelFilename))
+                {
+                    // MODL contains a body part ID, not a direct filename
+                    // Clean the body part ID to remove null characters before lookup
+                    string cleanedBodyPartId = npcEntry.ModelFilename.TrimEnd('\0', ' ', '\t', '\r', '\n');
+                    cleanedBodyPartId = cleanedBodyPartId.Replace("\0", "");
+                    cleanedBodyPartId = new string(cleanedBodyPartId.Where(c => c != '\0').ToArray()).Trim();
+                    
+                    if (!string.IsNullOrEmpty(cleanedBodyPartId))
+                    {
+                        bodyPart = TESCharacterManager.GetBodyPart(cleanedBodyPartId);
+                        if (bodyPart == null)
+                        {
+                            UnityEngine.Debug.LogWarning($"PlaceNPC: NPC '{npcId}' references body part '{cleanedBodyPartId}' (original: '{npcEntry.ModelFilename}') which was not found");
+                        }
+                    }
+                }
+                
+                if (!string.IsNullOrEmpty(npcEntry.HeadModel))
+                {
+                    // BNAM contains a body part ID for the head
+                    // Clean the body part ID to remove null characters before lookup
+                    string cleanedHeadPartId = npcEntry.HeadModel.TrimEnd('\0', ' ', '\t', '\r', '\n');
+                    cleanedHeadPartId = cleanedHeadPartId.Replace("\0", "");
+                    cleanedHeadPartId = new string(cleanedHeadPartId.Where(c => c != '\0').ToArray()).Trim();
+                    
+                    if (!string.IsNullOrEmpty(cleanedHeadPartId))
+                    {
+                        headPart = TESCharacterManager.GetBodyPart(cleanedHeadPartId);
+                        if (headPart == null)
+                        {
+                            UnityEngine.Debug.LogWarning($"PlaceNPC: NPC '{npcId}' references head body part '{cleanedHeadPartId}' (original: '{npcEntry.HeadModel}') which was not found");
+                        }
+                    }
+                }
+                
+                if (!string.IsNullOrEmpty(npcEntry.HairModel))
+                {
+                    // KNAM contains a body part ID for the hair
+                    // Clean the body part ID to remove null characters before lookup
+                    string cleanedHairPartId = npcEntry.HairModel.TrimEnd('\0', ' ', '\t', '\r', '\n');
+                    cleanedHairPartId = cleanedHairPartId.Replace("\0", "");
+                    cleanedHairPartId = new string(cleanedHairPartId.Where(c => c != '\0').ToArray()).Trim();
+                    
+                    if (!string.IsNullOrEmpty(cleanedHairPartId))
+                    {
+                        hairPart = TESCharacterManager.GetBodyPart(cleanedHairPartId);
+                        if (hairPart == null)
+                        {
+                            UnityEngine.Debug.LogWarning($"PlaceNPC: NPC '{npcId}' references hair body part '{cleanedHairPartId}' (original: '{npcEntry.HairModel}') which was not found");
+                        }
+                    }
+                }
+                
+                // Note: We don't require all body parts to exist
+                // NPCs can be placed with just body, just head, just hair, or any combination
+                // This allows NPCs to be placed even if some body parts fail to load
+                // (e.g., due to niflib.net parsing limitations with certain NIF file formats)
+
+                // Convert Morrowind world coordinates to Unity world coordinates
+                // Same coordinate conversion as PlaceStaticObject
+                float scaledX = refp.x * TESGlobals.MORROWIND_TO_STATIC_SCALE;
+                float scaledZ = refp.y * TESGlobals.MORROWIND_TO_STATIC_SCALE; // Use refp.y for Z (North coordinate)
+                float scaledY = refp.z * TESGlobals.MORROWIND_TO_STATIC_SCALE; // Use refp.z for Y (Height coordinate)
+
+                Vector3 unityPosition = new Vector3(
+                    scaledX,      // X position in world space
+                    scaledY,      // Y position (height)
+                    scaledZ       // Z position in world space
+                );
+
+                // Convert Morrowind rotation to Unity rotation
+                // Same rotation conversion as PlaceStaticObject
+                Quaternion unityRotation = Quaternion.Euler(
+                    -refp.yaw * Mathf.Rad2Deg,    // Yaw -> X
+                    -refp.pitch * Mathf.Rad2Deg,  // Pitch -> Y
+                    -refp.roll * Mathf.Rad2Deg    // Roll -> Z
+                );
+
+                // Create parent GameObject for the NPC (will hold all body parts)
+                GameObject npcObj = new GameObject($"{npcEntry.DisplayName ?? npcId} (NPC)");
+                npcObj.transform.position = unityPosition;
+                npcObj.transform.rotation = unityRotation;
+                
+                // NPC models should be 128 Morrowind units tall = 1 Unity unit
+                // Body part models are already in Morrowind units, so we need to scale them appropriately
+                // The scale factor is 1 / 128 = MORROWIND_TO_STATIC_SCALE (0.0078125)
+                // However, we also need to account for XSCL if present
+                // Base scale: 1 Unity unit / 128 Morrowind units
+                Vector3 characterBaseScale = new Vector3(
+                    TESGlobals.MORROWIND_TO_CHARACTER_SCALE,
+                    TESGlobals.MORROWIND_TO_CHARACTER_SCALE,
+                    TESGlobals.MORROWIND_TO_CHARACTER_SCALE
+                );
+                
+                // Apply XSCL scale if present (default is 1.0)
+                if (scale < 0)
+                {
+                    npcObj.transform.localScale = characterBaseScale * Mathf.Abs(scale);
+                }
+                else
+                {
+                    npcObj.transform.localScale = characterBaseScale * scale;
+                }
+                
+                // Load and attach body parts
+                // Note: Some body parts may fail to load due to niflib.net parsing limitations
+                // (e.g., "Invalid object type string length!" errors with certain NIF formats)
+                // We continue loading other parts even if some fail
+                int loadedPartsCount = 0;
+                
+                // Load body (main model)
+                if (bodyPart != null && !string.IsNullOrEmpty(bodyPart.ModelFilename))
+                {
+                    UnityEngine.Debug.Log($"PlaceNPC: Loading body model for NPC '{npcId}': body part ID='{bodyPart.BodyPartId}', model filename='{bodyPart.ModelFilename}'");
+                    GameObject bodyModel = LoadBodyPartModel(bodyPart.ModelFilename, bodyPart.BodyPartId);
+                    if (bodyModel != null)
+                    {
+                        bodyModel.transform.SetParent(npcObj.transform, false);
+                        bodyModel.name = "Body";
+                        loadedPartsCount++;
+                        UnityEngine.Debug.Log($"PlaceNPC: Successfully loaded body model for NPC '{npcId}'");
+                    }
+                    else
+                    {
+                        UnityEngine.Debug.LogWarning($"PlaceNPC: Failed to load body model for NPC '{npcId}' (body part: '{bodyPart.BodyPartId}', model: '{bodyPart.ModelFilename}'). This may be due to niflib.net parsing limitations.");
+                    }
+                }
+                else
+                {
+                    if (bodyPart == null)
+                    {
+                        UnityEngine.Debug.LogWarning($"PlaceNPC: NPC '{npcId}' has no body part (MODL was null or lookup failed). MODL value was: '{npcEntry.ModelFilename}'");
+                    }
+                    else if (string.IsNullOrEmpty(bodyPart.ModelFilename))
+                    {
+                        UnityEngine.Debug.LogWarning($"PlaceNPC: NPC '{npcId}' body part '{bodyPart.BodyPartId}' has no model filename");
+                    }
+                }
+                
+                // Load head
+                if (headPart != null && !string.IsNullOrEmpty(headPart.ModelFilename))
+                {
+                    GameObject headModel = LoadBodyPartModel(headPart.ModelFilename, headPart.BodyPartId);
+                    if (headModel != null)
+                    {
+                        headModel.transform.SetParent(npcObj.transform, false);
+                        headModel.name = "Head";
+                        loadedPartsCount++;
+                    }
+                    else
+                    {
+                        UnityEngine.Debug.LogWarning($"PlaceNPC: Failed to load head model for NPC '{npcId}' (body part: '{headPart.BodyPartId}'). This may be due to niflib.net parsing limitations.");
+                    }
+                }
+                
+                // Load hair
+                if (hairPart != null && !string.IsNullOrEmpty(hairPart.ModelFilename))
+                {
+                    GameObject hairModel = LoadBodyPartModel(hairPart.ModelFilename, hairPart.BodyPartId);
+                    if (hairModel != null)
+                    {
+                        hairModel.transform.SetParent(npcObj.transform, false);
+                        hairModel.name = "Hair";
+                        loadedPartsCount++;
+                    }
+                    else
+                    {
+                        UnityEngine.Debug.LogWarning($"PlaceNPC: Failed to load hair model for NPC '{npcId}' (body part: '{hairPart.BodyPartId}'). This may be due to niflib.net parsing limitations.");
+                    }
+                }
+                
+                // Check if we loaded at least one body part
+                if (loadedPartsCount == 0)
+                {
+                    UnityEngine.Debug.LogWarning($"PlaceNPC: NPC '{npcId}' has no loadable body parts. All body parts failed to load (likely due to niflib.net parsing limitations).");
+                    GameObject.Destroy(npcObj);
+                    failedCount++;
+                    return false;
+                }
+
+                // TODO: Handle skinned meshes and bone mapping
+                // Morrowind character models use Bip01 bone hierarchy (similar to 3ds Max Biped)
+                // Need to:
+                // 1. Detect if model has skinned meshes (NiSkinInstance, NiSkinData, NiSkinPartition)
+                // 2. Map Morrowind bones to Unity humanoid rig (Bip01 -> Humanoid bones)
+                // 3. Convert right-handed to left-handed coordinate system for bones
+                // 4. Set up Animator component with humanoid avatar
+                // 5. Configure Mechanim for 3rd person controller compatibility
+                // 
+                // Reference OpenMW:
+                // - components/nif/nifloader.cpp: loadKf() for animation loading
+                // - components/scene/skinned.cpp: SkinnedMesh for bone hierarchy
+                // - components/scene/node.cpp: Node::update() for transform updates
+                //
+                // For now, NPCs are placed as static meshes. Skinned mesh support will be added later.
+
+                // Fix reflection issues: negate Z scale and negate Yaw (same as static objects)
+                Vector3 currentScale = npcObj.transform.localScale;
+                npcObj.transform.localScale = new Vector3(currentScale.x, currentScale.y, -currentScale.z);
+
+                Vector3 euler = npcObj.transform.rotation.eulerAngles;
+                float yaw = euler.y;
+                if (yaw > 180f) yaw -= 360f;
+                npcObj.transform.rotation = Quaternion.Euler(euler.x, -yaw, euler.z);
+
+                // Parent to cell or specified parent
+                Transform parentTransform = cellParent != null ? cellParent.transform : null;
+                if (parentTransform != null)
+                {
+                    npcObj.transform.SetParent(parentTransform, worldPositionStays: true);
+                }
+
+                // Add NPC component for future scripting/interaction
+                // TODO: Create NPC component class to hold NPC data, AI, dialogue, etc.
+                // Note: Not setting tag since "NPC" tag doesn't exist by default in Unity
+                // Can be added via Tags & Layers settings if needed
+
+                placedCount++;
+                return true;
+            }
+            catch (System.Exception)
+            {
+                UnityEngine.Debug.LogError($"PlaceNPC: Exception while placing NPC '{npcId}' in cell ({cellGridX}, {cellGridY})");
+                failedCount++;
+                return false;
+            }
+        }
+        
+        /// <summary>
+        /// Loads a body part model from cache or BSA, similar to how statics are loaded.
+        /// Uses TESLTextureLibrary for textures and BSA extraction if needed.
+        /// </summary>
+        /// <param name="modelFilename">The model filename from the BODY record</param>
+        /// <param name="bodyPartId">The body part ID for caching/lookup</param>
+        /// <returns>The loaded GameObject, or null if loading failed</returns>
+        private GameObject LoadBodyPartModel(string modelFilename, string bodyPartId)
+        {
+            if (string.IsNullOrEmpty(modelFilename))
+                return null;
+            
+            // Clean the model filename
+            modelFilename = modelFilename.TrimEnd('\0', ' ', '\t', '\r', '\n');
+            modelFilename = modelFilename.Replace("\0", "");
+            modelFilename = modelFilename.Trim();
+            
+            // Normalize path separators (replace backslashes with forward slashes for consistency)
+            modelFilename = modelFilename.Replace('\\', '/');
+            
+            // Strip any subdirectory paths from filename (use just the base filename)
+            string baseFilename = Path.GetFileName(modelFilename);
+            string baseFilenameNoExt = Path.GetFileNameWithoutExtension(baseFilename);
+            
+            // Normalize to lowercase for case-insensitive lookup (Windows file system is case-insensitive but we want consistency)
+            string baseFilenameLower = baseFilename.ToLowerInvariant();
+            string baseFilenameNoExtLower = baseFilenameNoExt.ToLowerInvariant();
+            
+            // Check if we've already loaded this model (mesh instancing)
+            // Try both original case and lowercase
+            TESNifLibrary.NifEntry cachedEntry = TESNifLibrary.GetModelByBaseFilename(baseFilenameNoExt);
+            if (cachedEntry == null && !string.Equals(baseFilenameNoExt, baseFilenameNoExtLower, StringComparison.Ordinal))
+            {
+                cachedEntry = TESNifLibrary.GetModelByBaseFilename(baseFilenameNoExtLower);
+            }
+            
+            if (cachedEntry != null)
+            {
+                // Instantiate the existing model
+                GameObject instantiatedModel = GameObject.Instantiate(cachedEntry.Model);
+                instantiatedModel.name = baseFilenameNoExt;
+                return instantiatedModel;
+            }
+            
+            // Try to load from cache first (try original case, then lowercase)
+            GameObject modelObj = _nifLoader.LoadNIFFromCache(baseFilename);
+            if (modelObj == null && !string.Equals(baseFilename, baseFilenameLower, StringComparison.Ordinal))
+            {
+                // Try case-insensitive search in cache directory
+                string cacheDir = Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Models", _esm);
+                if (Directory.Exists(cacheDir))
+                {
+                    string[] files = Directory.GetFiles(cacheDir, "*.nif", SearchOption.TopDirectoryOnly);
+                    foreach (string file in files)
+                    {
+                        string fileName = Path.GetFileName(file);
+                        string fileNameNoExt = Path.GetFileNameWithoutExtension(fileName);
+                        if (string.Equals(fileNameNoExt, baseFilenameNoExtLower, StringComparison.OrdinalIgnoreCase))
+                        {
+                            // Found case-insensitive match, try loading with the actual filename
+                            modelObj = _nifLoader.LoadNIFFromCache(fileName);
+                            if (modelObj != null)
+                            {
+                                baseFilename = fileName; // Update to use the actual filename
+                                baseFilenameNoExt = fileNameNoExt;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            
+            if (modelObj != null)
+            {
+                // Store in library for future instancing
+                TESNifLibrary.AddModel(bodyPartId, bodyPartId, modelFilename, baseFilenameNoExt, modelObj, combineMeshes: false);
+                modelObj.name = baseFilenameNoExt;
+                return modelObj;
+            }
+            
+            // If not in cache, try to extract from BSA (same as statics)
+            // Try both original case and lowercase for BSA lookup
+            string extractedFilename = TryExtractFromBSA(baseFilenameNoExt);
+            if (string.IsNullOrEmpty(extractedFilename) && !string.Equals(baseFilenameNoExt, baseFilenameNoExtLower, StringComparison.Ordinal))
+            {
+                extractedFilename = TryExtractFromBSA(baseFilenameNoExtLower);
+            }
+            
+            if (!string.IsNullOrEmpty(extractedFilename))
+            {
+                // Normalize the extracted filename (remove any path separators, ensure correct case)
+                string normalizedExtractedFilename = Path.GetFileName(extractedFilename);
+                normalizedExtractedFilename = normalizedExtractedFilename.Replace('\\', '/');
+                
+                // Try loading again after extraction
+                GameObject extractedModel = _nifLoader.LoadNIFFromCache(normalizedExtractedFilename);
+                
+                // If that failed, try case-insensitive search
+                if (extractedModel == null)
+                {
+                    string cacheDir = Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Models", _esm);
+                    if (Directory.Exists(cacheDir))
+                    {
+                        string[] files = Directory.GetFiles(cacheDir, "*.nif", SearchOption.TopDirectoryOnly);
+                        string extractedLower = normalizedExtractedFilename.ToLowerInvariant();
+                        foreach (string file in files)
+                        {
+                            string fileName = Path.GetFileName(file);
+                            if (string.Equals(fileName, normalizedExtractedFilename, StringComparison.OrdinalIgnoreCase))
+                            {
+                                extractedModel = _nifLoader.LoadNIFFromCache(fileName);
+                                if (extractedModel != null)
+                                {
+                                    normalizedExtractedFilename = fileName;
+                                    baseFilename = fileName;
+                                    baseFilenameNoExt = Path.GetFileNameWithoutExtension(fileName);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                if (extractedModel != null)
+                {
+                    // Store in library for future instancing
+                    TESNifLibrary.AddModel(bodyPartId, bodyPartId, modelFilename, baseFilenameNoExt, extractedModel, combineMeshes: false);
+                    extractedModel.name = baseFilenameNoExt;
+                    return extractedModel;
+                }
+            }
+            
+            UnityEngine.Debug.LogWarning($"PlaceNPC: Failed to load body part model '{modelFilename}' (ID: {bodyPartId}) from cache or BSA. File may exist but niflib.net cannot parse it.");
+            return null;
         }
     }
 }

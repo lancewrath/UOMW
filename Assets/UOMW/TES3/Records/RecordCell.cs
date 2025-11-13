@@ -123,6 +123,12 @@ namespace ESMSharp.TES3
                     subrecord = subRecordCellDNAM;
                     break;
 
+                case "ANAM":
+                    SubRecordCellANAM subRecordCellANAM = new SubRecordCellANAM();
+                    subRecordCellANAM.Deserialize(reader, srecord, Convert.ToInt32(subrecordsize));
+                    subrecord = subRecordCellANAM;
+                    break;
+
                 case "FLTV":
                     reader.ReadUInt32();
                     break;

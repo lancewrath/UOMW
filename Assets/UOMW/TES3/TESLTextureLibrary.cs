@@ -308,7 +308,7 @@ namespace ESMSharp.TES3
             
             // Normalize texture directory path to ensure consistent separators
             textureDir = System.IO.Path.GetFullPath(textureDir);
-            Debug.Log($"TESLTextureLibrary: Searching for texture '{baseName}' in directory: {textureDir}");
+            //Debug.Log($"TESLTextureLibrary: Searching for texture '{baseName}' in directory: {textureDir}");
             
             foreach (string ext in extensions)
             {
@@ -319,7 +319,7 @@ namespace ESMSharp.TES3
                 {
                     foundPath = searchPath;
                     foundExtension = ext;
-                    Debug.Log($"TESLTextureLibrary: Found texture file: {System.IO.Path.GetFileName(searchPath)} (full path: {searchPath})");
+                    //Debug.Log($"TESLTextureLibrary: Found texture file: {System.IO.Path.GetFileName(searchPath)} (full path: {searchPath})");
                     break;
                 }
             }
@@ -428,7 +428,7 @@ namespace ESMSharp.TES3
                         // Check if file exists in BSA
                         if (TESBSALibrary.FileExists(bsaFileName, esmName + ".esm"))
                         {
-                            Debug.Log($"TESLTextureLibrary: Found texture in BSA: {bsaFileName}");
+                            //Debug.Log($"TESLTextureLibrary: Found texture in BSA: {bsaFileName}");
                             
                             string outputPath = System.IO.Path.Combine(textureDir, baseName + ext);
                             System.IO.Directory.CreateDirectory(textureDir);
@@ -706,7 +706,7 @@ namespace ESMSharp.TES3
                         #endif
                         normalMap.name = baseName + "_n";
                         textureEntry.NormalMap = normalMap;
-                        Debug.Log($"TESLTextureLibrary: Loaded existing normal map: {System.IO.Path.GetFileName(normalMapPath)}");
+                        //Debug.Log($"TESLTextureLibrary: Loaded existing normal map: {System.IO.Path.GetFileName(normalMapPath)}");
                         return normalMap;
                     }
                     UnityEngine.Object.DestroyImmediate(normalMap);

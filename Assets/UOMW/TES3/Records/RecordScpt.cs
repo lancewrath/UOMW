@@ -11,6 +11,24 @@ namespace ESMSharp.TES3
     public class RecordScpt : Record
     {
         private MWScriptHeader _header = null;
+        private string[] _variables = null;
+        private string _sourceCode = null;
+        
+        /// <summary>
+        /// Gets the script header (name, variable counts, etc.)
+        /// </summary>
+        public MWScriptHeader Header { get { return _header; } }
+        
+        /// <summary>
+        /// Gets the script variables array
+        /// </summary>
+        public string[] Variables { get { return _variables; } }
+        
+        /// <summary>
+        /// Gets the script source code
+        /// </summary>
+        public string SourceCode { get { return _sourceCode; } }
+        
         public override void Deserialize(BetterReader reader, string name)
         {
             type = name;
@@ -51,6 +69,7 @@ namespace ESMSharp.TES3
                     SubRecordScptSCVR subRecordScptSCVR = new SubRecordScptSCVR();
                     subRecordScptSCVR.Deserialize(reader, srecord, Convert.ToInt32(subrecordsize));
                     subrecord = subRecordScptSCVR;
+                    _variables = subRecordScptSCVR.variables;
                     break;
 
                 case "SCDT":
@@ -62,8 +81,9 @@ namespace ESMSharp.TES3
                     if (_header != null)
                     {
                         SubRecordSctpSCTX subRecordsctpSCTX = new SubRecordSctpSCTX();
-                        subRecordsctpSCTX.Deserialize(reader, srecord, Convert.ToInt32(subrecordsize),_header.name);
+                        subRecordsctpSCTX.Deserialize(reader, srecord, Convert.ToInt32(subrecordsize), _header.name, _header, _variables);
                         subrecord = subRecordsctpSCTX;
+                        _sourceCode = subRecordsctpSCTX.name; // Store source code
                     }
                     else
                     {

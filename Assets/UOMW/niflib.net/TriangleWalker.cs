@@ -239,7 +239,7 @@ namespace Niflib.Extensions
 			while (current != null)
 			{
 				// Append Transformation To Matrix
-				Matrix intermediate;
+				Matrix intermediate = default(Matrix);
 				
 				#if SharpDX
 				Matrix.Multiply(ref worldMatrix, ref current.Rotation, out intermediate);
@@ -265,6 +265,7 @@ namespace Niflib.Extensions
 				worldMatrix = intermediate;
 				#else
 				// Unity Matrix4x4 API - Rotation is already a Matrix4x4
+				// Note: 'intermediate' is not used in Unity path but is needed for SharpDX/MonoGame paths
 				worldMatrix = worldMatrix * (Matrix4x4)current.Rotation;
 				
 				var scale = Matrix4x4.Scale(new Vector3(current.Scale, current.Scale, current.Scale));

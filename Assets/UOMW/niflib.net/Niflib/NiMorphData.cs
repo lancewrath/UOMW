@@ -52,16 +52,33 @@ namespace Niflib
         /// </summary>
         /// <param name="file">The file.</param>
         /// <param name="reader">The reader.</param>
-        public NiMorphData(NiFile file, BinaryReader reader) : base(file, reader)
+		public NiMorphData(NiFile file, BinaryReader reader) : base(file, reader)
 		{
+			long positionBeforeRead = reader.BaseStream.Position;
 			this.NumMorphs = reader.ReadUInt32();
 			this.NumVertices = reader.ReadUInt32();
 			this.RelativeTargets = reader.ReadByte();
+			
+			// Sanity check: NumMorphs and NumVertices should be reasonable
+			if (this.NumMorphs > 1000u)
+			{
+				UnityEngine.Debug.LogError($"niflib.net: Suspicious NumMorphs value in NiMorphData at position {positionBeforeRead}: {this.NumMorphs} (0x{this.NumMorphs:X8}). This suggests file misalignment.");
+			}
+			if (this.NumVertices > 100000u)
+			{
+				UnityEngine.Debug.LogError($"niflib.net: Suspicious NumVertices value in NiMorphData at position {positionBeforeRead + 4}: {this.NumVertices} (0x{this.NumVertices:X8}). This suggests file misalignment.");
+			}
+			
+			UnityEngine.Debug.Log($"niflib.net: NiMorphData: NumMorphs={this.NumMorphs}, NumVertices={this.NumVertices}, RelativeTargets={this.RelativeTargets}, position={positionBeforeRead}");
+			
 			this.Morphs = new Morph[this.NumMorphs];
 			int num = 0;
 			while ((long)num < (long)((ulong)this.NumMorphs))
 			{
+				long positionBeforeMorph = reader.BaseStream.Position;
 				this.Morphs[num] = new Morph(file, reader, this.NumVertices);
+				long positionAfterMorph = reader.BaseStream.Position;
+				UnityEngine.Debug.Log($"niflib.net: NiMorphData: Read morph {num + 1} of {this.NumMorphs} from position {positionBeforeMorph} to {positionAfterMorph} (size: {positionAfterMorph - positionBeforeMorph} bytes)");
 				num++;
 			}
 		}

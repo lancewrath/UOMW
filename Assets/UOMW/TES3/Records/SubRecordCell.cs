@@ -113,6 +113,39 @@ namespace ESMSharp.TES3
         }
     }
 
+    public class SubRecordCellANAM : SubRecords
+    {
+        private string _name;
+
+        public string name { get { return _name; } }
+
+        public SubRecordCellANAM()
+        {
+
+
+
+        }
+        public SubRecordCellANAM(string type)
+        {
+            _type = type;
+        }
+
+        public void Deserialize(BetterReader reader, string name, int size)
+        {
+            _type = name;
+            _name = reader.ReadString(size);
+            Utils.LogBuffer("\t- Name: {0}", _name);
+        }
+
+        public override void Deserialize(BetterReader reader, string name)
+        {
+            _type = name;
+
+
+        }
+    }
+
+
     public class SubRecordCellDODT : SubRecords
     {
         private float _x = 0;

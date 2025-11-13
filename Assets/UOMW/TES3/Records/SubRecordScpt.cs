@@ -133,15 +133,22 @@ namespace ESMSharp.TES3
 
         public void Deserialize(BetterReader reader, string name, int size, string filename)
         {
+            Deserialize(reader, name, size, filename, null, null);
+        }
+        
+        public void Deserialize(BetterReader reader, string name, int size, string filename, MWScriptHeader header, string[] variables)
+        {
             _type = name;
             _name = reader.ReadString(size);
             filename = SanitizeFileName(filename)+".mws";
             Debug.Log("File: " + filename);
             
+            // Create cache directory and save script to file
             Directory.CreateDirectory(System.IO.Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Scripts"));      
             File.WriteAllText(System.IO.Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Scripts", filename), _name);
-            //Debug.Log("Write file: " + System.IO.Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Scripts", filename + ".mws"));
-            //Utils.LogBuffer("\t- Script saved to: {0}", filename);
+            
+            // Note: Script registration with TESMWScriptManager is handled in TESESMLibrary
+            // after the full RecordScpt is parsed, so we have access to the source ESM filename
         }
 
         public override void Deserialize(BetterReader reader, string name)

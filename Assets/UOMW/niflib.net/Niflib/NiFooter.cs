@@ -41,7 +41,22 @@ namespace Niflib
 		{
 			if (file.Header.Version >= eNifVersion.VER_3_3_0_13)
 			{
+				long positionBeforeRead = reader.BaseStream.Position;
 				uint num = reader.ReadUInt32();
+				
+				// Sanity check: root node count should be reasonable (not millions)
+				// If it's huge, we probably read from the wrong position
+				if (num > 10000u)
+				{
+					// This is probably garbage data - log and try to recover
+					UnityEngine.Debug.LogError($"niflib.net: Suspicious root node count in footer: {num} (0x{num:X8}) at position {positionBeforeRead}. This suggests file misalignment. Value looks like: '{System.Text.Encoding.ASCII.GetString(BitConverter.GetBytes(num))}'");
+					
+					// Try to find a reasonable value by looking ahead/behind
+					// For now, just set to 0 to avoid OutOfMemoryException
+					this.RootNodes = new NiRef<NiObject>[0];
+					return;
+				}
+				
 				this.RootNodes = new NiRef<NiObject>[num];
 				int num2 = 0;
 				while ((long)num2 < (long)((ulong)num))

@@ -212,6 +212,38 @@ namespace ESMSharp.TES3
                                 RecordScpt scptrecord = new RecordScpt();
                                 scptrecord.Deserialize(reader, name);
                                 mRecord = scptrecord;
+                                
+                                // Register script with TESMWScriptManager if it has all required data
+                                if (scptrecord.Header != null && !string.IsNullOrEmpty(scptrecord.SourceCode))
+                                {
+                                    string cacheFilename = SubRecordSctpSCTX.SanitizeFileName(scptrecord.Header.name) + ".mws";
+                                    TESMWScriptManager.AddScript(
+                                        scptrecord.Header.name, 
+                                        scptrecord.SourceCode, 
+                                        scptrecord.Variables, 
+                                        scptrecord.Header, 
+                                        cacheFilename, 
+                                        esmFilename
+                                    );
+                                }
+                                break;
+
+                            case "BODY":
+                                RecordBody recordBody = new RecordBody();
+                                recordBody.Deserialize(reader, name);
+                                mRecord = recordBody;
+                                
+                                // Register body part with TESCharacterManager
+                                TESCharacterManager.AddBodyPart(recordBody, esmFilename);
+                                break;
+
+                            case "NPC_":
+                                RecordNPC recordNPC = new RecordNPC();
+                                recordNPC.Deserialize(reader, name);
+                                mRecord = recordNPC;
+                                
+                                // Register NPC with TESCharacterManager
+                                TESCharacterManager.AddNPC(recordNPC, esmFilename);
                                 break;
 
                             default:
