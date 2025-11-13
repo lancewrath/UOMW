@@ -799,7 +799,7 @@ namespace ESMSharp.TES3Terrain
                 
                 // Check if we've already loaded this model (mesh instancing) - use global library
                 TESNifLibrary.NifEntry cachedEntry = TESNifLibrary.GetModelByBaseFilename(baseFilenameNoExt);
-                if (cachedEntry != null)
+                if (cachedEntry != null && cachedEntry.Model != null)
                 {
                     // Instantiate the existing model instead of loading again
                     GameObject instanceObj = GameObject.Instantiate(cachedEntry.Model);
@@ -970,7 +970,7 @@ namespace ESMSharp.TES3Terrain
             {
                 // Check cache first
                 TESNifLibrary.NifEntry cachedEntry = TESNifLibrary.GetModelByBaseFilename(baseFilenameNoExt);
-                if (cachedEntry != null)
+                if (cachedEntry != null && cachedEntry.Model != null)
                 {
                     GameObject instanceObj = GameObject.Instantiate(cachedEntry.Model);
                     instanceObj.name = cachedEntry.Model.name;
@@ -1083,7 +1083,7 @@ namespace ESMSharp.TES3Terrain
             try
             {
                 TESNifLibrary.NifEntry cachedEntry = TESNifLibrary.GetModelByBaseFilename(baseFilenameNoExt);
-                if (cachedEntry != null)
+                if (cachedEntry != null && cachedEntry.Model != null)
                 {
                     GameObject instanceObj = GameObject.Instantiate(cachedEntry.Model);
                     instanceObj.name = cachedEntry.Model.name;
@@ -1222,14 +1222,14 @@ namespace ESMSharp.TES3Terrain
         /// <summary>
         /// Coroutine version of PlaceStaticObject that uses async model loading
         /// </summary>
-        private IEnumerator PlaceStaticObjectCoroutine(string modelFilename, SubRecordCellREFP refp, float scale, SubRecordCellObjectID objectId, Transform parent, int cellGridX, int cellGridY, Record[] allRecords, System.Action<bool> onComplete)
+        private IEnumerator PlaceStaticObjectCoroutine(string modelFilename, SubRecordCellREFP refp, float scale, SubRecordCellObjectID objectId, Transform parent, int cellGridX, int cellGridY, Record[] allRecords, TESLightManager.LightEntry lightEntry, System.Action<bool> onComplete)
         {
             bool result = false;
             string baseFilename = Path.GetFileName(modelFilename);
             string baseFilenameNoExt = Path.GetFileNameWithoutExtension(baseFilename);
             
             TESNifLibrary.NifEntry cachedEntry = TESNifLibrary.GetModelByBaseFilename(baseFilenameNoExt);
-            if (cachedEntry != null)
+            if (cachedEntry != null && cachedEntry.Model != null)
             {
                 try
                 {
@@ -1253,6 +1253,21 @@ namespace ESMSharp.TES3Terrain
                         instanceObj.name = objectId.objectId.TrimEnd('\0');
                     
                     AddLODToObject(instanceObj);
+                    
+                    // Check if this is a light and attach TESLight component
+                    if (lightEntry != null)
+                    {
+                        AttachLightComponent(instanceObj, lightEntry);
+                    }
+                    else if (objectId != null && !string.IsNullOrEmpty(objectId.objectId))
+                    {
+                        // Fallback: try to find light by ID if not passed in
+                        string lightId = objectId.objectId.TrimEnd('\0', ' ', '\t', '\r', '\n');
+                        lightId = lightId.Replace("\0", "");
+                        lightId = new string(lightId.Where(c => c != '\0').ToArray()).Trim();
+                        AttachLightComponentIfNeeded(instanceObj, lightId);
+                    }
+                    
                     if (parent != null)
                         instanceObj.transform.SetParent(parent, worldPositionStays: true);
                     
@@ -1277,11 +1292,15 @@ namespace ESMSharp.TES3Terrain
             }
             
             GameObject modelObj = null;
+            // Cannot use try-catch with yield return, so we handle errors after the yield
             yield return LoadNIFModelCoroutine(baseFilename, false, (loadedModel) => modelObj = loadedModel);
             
             if (modelObj == null)
             {
-                onComplete?.Invoke(false);
+                // Model failed to load - log warning but continue with other statics
+                UnityEngine.Debug.LogWarning($"PlaceStaticObjectCoroutine: Failed to load model '{baseFilename}' for object '{objectId?.objectId}' - skipping this static");
+                result = false;
+                onComplete?.Invoke(result);
                 yield break;
             }
             
@@ -1289,7 +1308,17 @@ namespace ESMSharp.TES3Terrain
             {
                 string staticId = objectId?.objectId?.TrimEnd('\0');
                 string staticName = staticId;
-                TESNifLibrary.AddModel(staticId, staticName, modelFilename, baseFilenameNoExt, modelObj, combineMeshes: false);
+                
+                // IMPORTANT: Store the model in the library BEFORE applying any instance-specific transforms
+                // The model from NIFLoader should be in a clean state (no transforms applied)
+                // We check if it's already in the library first to avoid storing duplicates
+                TESNifLibrary.NifEntry existingEntry = TESNifLibrary.GetModelByBaseFilename(baseFilenameNoExt);
+                if (existingEntry == null)
+                {
+                    // Store the model in library (this is the first time loading this model)
+                    // The model should be in a clean state from NIFLoader
+                    TESNifLibrary.AddModel(staticId, staticName, modelFilename, baseFilenameNoExt, modelObj, combineMeshes: false);
+                }
                 
                 float scaledX2 = refp.x * TESGlobals.MORROWIND_TO_STATIC_SCALE;
                 float scaledZ2 = refp.y * TESGlobals.MORROWIND_TO_STATIC_SCALE;
@@ -1301,8 +1330,10 @@ namespace ESMSharp.TES3Terrain
                 modelObj.transform.position = unityPosition2;
                 modelObj.transform.rotation = unityRotation2;
                 
-                Vector3 modelBaseScale = modelObj.transform.localScale;
-                modelObj.transform.localScale = modelBaseScale * (scale < 0 ? Mathf.Abs(scale) : scale);
+                // XSCL scale multiplies the base GameObject scale (MORROWIND_TO_STATIC_SCALE = 0.0078125), not replaces it
+                // Use MORROWIND_TO_STATIC_SCALE directly for consistency with cached models
+                Vector3 instanceBaseScale = new Vector3(TESGlobals.MORROWIND_TO_STATIC_SCALE, TESGlobals.MORROWIND_TO_STATIC_SCALE, TESGlobals.MORROWIND_TO_STATIC_SCALE);
+                modelObj.transform.localScale = instanceBaseScale * (scale < 0 ? Mathf.Abs(scale) : scale);
                 
                 if (objectId != null && !string.IsNullOrEmpty(objectId.objectId))
                     modelObj.name = objectId.objectId.TrimEnd('\0');
@@ -1310,6 +1341,21 @@ namespace ESMSharp.TES3Terrain
                     modelObj.name = Path.GetFileNameWithoutExtension(modelFilename);
                 
                 AddLODToObject(modelObj);
+                
+                // Check if this is a light and attach TESLight component
+                if (lightEntry != null)
+                {
+                    AttachLightComponent(modelObj, lightEntry);
+                }
+                else if (objectId != null && !string.IsNullOrEmpty(objectId.objectId))
+                {
+                    // Fallback: try to find light by ID if not passed in
+                    string lightId = objectId.objectId.TrimEnd('\0', ' ', '\t', '\r', '\n');
+                    lightId = lightId.Replace("\0", "");
+                    lightId = new string(lightId.Where(c => c != '\0').ToArray()).Trim();
+                    AttachLightComponentIfNeeded(modelObj, lightId);
+                }
+                
                 if (parent != null)
                     modelObj.transform.SetParent(parent, worldPositionStays: true);
                 
@@ -1412,7 +1458,7 @@ namespace ESMSharp.TES3Terrain
                 
                 // Check if we've already loaded this model (mesh instancing) - use global library
                 TESNifLibrary.NifEntry cachedEntry = TESNifLibrary.GetModelByBaseFilename(baseFilenameNoExt);
-                if (cachedEntry != null)
+                if (cachedEntry != null && cachedEntry.Model != null)
                 {
                     // Instantiate the existing model instead of loading again
                     GameObject instanceObj = GameObject.Instantiate(cachedEntry.Model);
@@ -1629,13 +1675,30 @@ namespace ESMSharp.TES3Terrain
                 yield break;
             }
 
-            // Clean the model ID name
-            string modelId = objectId.objectId.TrimEnd('\0', ' ', '\t', '\r', '\n');
-            modelId = modelId.Replace("\0", "");
-            modelId = modelId.Trim();
+            // Clean the model ID name (must match cleaning done in library managers)
+            // Use the exact same pattern as TESContainerLibrary and TESCharacterManager
+            string modelId = objectId.objectId;
+            if (modelId != null)
+            {
+                modelId = modelId.TrimEnd('\0', ' ', '\t', '\r', '\n');
+                modelId = modelId.Replace("\0", "");
+                modelId = new string(modelId.Where(c => c != '\0').ToArray()).Trim();
+            }
+            
+            if (string.IsNullOrEmpty(modelId))
+            {
+                UnityEngine.Debug.LogWarning("PlaceReference: Model ID was empty after cleaning");
+                switch (objectType)
+                {
+                    case ObjectType.Trees: counts.FailedTrees++; break;
+                    case ObjectType.Grass: counts.FailedGrass++; break;
+                    case ObjectType.LargeStructures: counts.FailedStructures++; break;
+                }
+                yield break;
+            }
 
             // Check if this might be an NPC (quick check - if it's not in STAT records)
-            string cleanedModelId = new string(modelId.Where(c => c != '\0').ToArray()).Trim();
+            string cleanedModelId = modelId; // Already cleaned above - this is the normalized ID
             bool mightBeNPC = !statRecordsByName.ContainsKey(modelId) && !statRecordsByName.ContainsKey(cleanedModelId);
             
             if (mightBeNPC)
@@ -1677,9 +1740,89 @@ namespace ESMSharp.TES3Terrain
 
                 if (!string.IsNullOrEmpty(modelFilename))
                 {
+                    // Clean the model filename
                     modelFilename = modelFilename.TrimEnd('\0', ' ', '\t', '\r', '\n');
                     modelFilename = modelFilename.Replace("\0", "");
                     modelFilename = modelFilename.Trim();
+                    
+                    // Normalize path separators (replace backslashes with forward slashes)
+                    modelFilename = modelFilename.Replace('\\', '/');
+                    
+                    // Extract just the filename (strip any subdirectory paths)
+                    modelFilename = Path.GetFileName(modelFilename);
+                }
+            }
+            
+            // If STAT record lookup failed, try to look up CONT (container) record
+            if (string.IsNullOrEmpty(modelFilename))
+            {
+                TESContainerLibrary.ContainerEntry containerEntry = TESContainerLibrary.GetContainer(modelId);
+                if (containerEntry == null && !string.Equals(modelId, cleanedModelId, StringComparison.OrdinalIgnoreCase))
+                {
+                    containerEntry = TESContainerLibrary.GetContainer(cleanedModelId);
+                }
+                
+                if (containerEntry != null && !string.IsNullOrEmpty(containerEntry.ModelFilename))
+                {
+                    // Clean the model filename from container
+                    modelFilename = containerEntry.ModelFilename.TrimEnd('\0', ' ', '\t', '\r', '\n');
+                    modelFilename = modelFilename.Replace("\0", "");
+                    modelFilename = modelFilename.Trim();
+                    
+                    // Normalize path separators (replace backslashes with forward slashes)
+                    modelFilename = modelFilename.Replace('\\', '/');
+                    
+                    // Extract just the filename (strip any subdirectory paths)
+                    modelFilename = Path.GetFileName(modelFilename);
+                    
+                    // Normalize entire filename to lowercase for consistency with cache files
+                    // This ensures "Contain_crate_02.NIF" becomes "contain_crate_02.nif" to match cache
+                    // Cache files are typically stored in lowercase
+                    modelFilename = modelFilename.ToLowerInvariant();
+                }
+            }
+            
+            // If STAT and CONT record lookups failed, try to look up LIGH (light) record
+            TESLightManager.LightEntry foundLightEntry = null; // Store for later component attachment
+            if (string.IsNullOrEmpty(modelFilename))
+            {
+                // Use the cleaned modelId (which should match how it's stored in TESLightManager)
+                TESLightManager.LightEntry lightEntry = TESLightManager.GetLight(modelId);
+                
+                // If not found, try with the original objectId.objectId (before cleaning)
+                // GetLight will normalize it, so this should work if there was a cleaning mismatch
+                if (lightEntry == null && objectId != null && !string.IsNullOrEmpty(objectId.objectId))
+                {
+                    string originalId = objectId.objectId;
+                    lightEntry = TESLightManager.GetLight(originalId);
+                    if (lightEntry != null)
+                    {
+                        UnityEngine.Debug.LogWarning($"[PlaceStatics] Found light using original ID '{originalId}' (cleaned was '{modelId}')");
+                    }
+                }
+                
+                if (lightEntry != null && !string.IsNullOrEmpty(lightEntry.ModelFilename))
+                {
+                    foundLightEntry = lightEntry; // Store for component attachment
+                    UnityEngine.Debug.LogWarning($"[PlaceStatics] Found light record '{modelId}', model: '{lightEntry.ModelFilename}'");
+                    // Clean the model filename from light (same pattern as containers)
+                    modelFilename = lightEntry.ModelFilename.TrimEnd('\0', ' ', '\t', '\r', '\n');
+                    modelFilename = modelFilename.Replace("\0", "");
+                    modelFilename = modelFilename.Trim();
+                    
+                    // Normalize path separators (replace backslashes with forward slashes)
+                    modelFilename = modelFilename.Replace('\\', '/');
+                    
+                    // Extract just the filename (strip any subdirectory paths)
+                    modelFilename = Path.GetFileName(modelFilename);
+                    
+                    // Normalize entire filename to lowercase for consistency with cache files
+                    // This ensures "Light_de_streetlight_01.NIF" becomes "light_de_streetlight_01.nif" to match cache
+                    // Cache files are typically stored in lowercase
+                    modelFilename = modelFilename.ToLowerInvariant();
+                    
+                    // Note: The NIFLoader will check TESNifLibrary cache first, then file system/BSA
+                    // and cache the result in TESNifLibrary for reuse, just like containers and NPCs
                 }
             }
 
@@ -1724,7 +1867,7 @@ namespace ESMSharp.TES3Terrain
 
             if (string.IsNullOrEmpty(modelFilename))
             {
-                UnityEngine.Debug.LogWarning($"Could not find model for ID '{modelId}' (checked STAT records and cache directory)");
+                UnityEngine.Debug.LogWarning($"Could not find model for ID '{modelId}' (checked STAT records, CONT records, LIGH records, and cache directory)");
                 switch (objectType)
                 {
                     case ObjectType.Trees: counts.FailedTrees++; break;
@@ -1770,7 +1913,7 @@ namespace ESMSharp.TES3Terrain
             else if (objectType == ObjectType.LargeStructures)
             {
                 Transform refParent = cellParent != null ? cellParent.transform : parent;
-                yield return PlaceStaticObjectCoroutine(modelFilename, refp, scale, objectId, refParent, cellGridX, cellGridY, allRecords, (result) => success = result);
+                yield return PlaceStaticObjectCoroutine(modelFilename, refp, scale, objectId, refParent, cellGridX, cellGridY, allRecords, foundLightEntry, (result) => success = result);
             }
             
             // Update counts based on result
@@ -1861,6 +2004,108 @@ namespace ESMSharp.TES3Terrain
                     modelFilename = modelFilename.TrimEnd('\0', ' ', '\t', '\r', '\n');
                     modelFilename = modelFilename.Replace("\0", "");
                     modelFilename = modelFilename.Trim();
+                    
+                    // Normalize path separators (replace backslashes with forward slashes)
+                    modelFilename = modelFilename.Replace('\\', '/');
+                    
+                    // Extract just the filename (strip any subdirectory paths)
+                    modelFilename = Path.GetFileName(modelFilename);
+                }
+            }
+            
+            // If STAT record lookup failed, try to look up CONT (container) record
+            if (string.IsNullOrEmpty(modelFilename))
+            {
+                TESContainerLibrary.ContainerEntry containerEntry = TESContainerLibrary.GetContainer(modelId);
+                if (containerEntry == null && !string.Equals(modelId, cleanedModelId, StringComparison.OrdinalIgnoreCase))
+                {
+                    containerEntry = TESContainerLibrary.GetContainer(cleanedModelId);
+                }
+                
+                if (containerEntry != null && !string.IsNullOrEmpty(containerEntry.ModelFilename))
+                {
+                    // Clean the model filename from container
+                    modelFilename = containerEntry.ModelFilename.TrimEnd('\0', ' ', '\t', '\r', '\n');
+                    modelFilename = modelFilename.Replace("\0", "");
+                    modelFilename = modelFilename.Trim();
+                    
+                    // Normalize path separators (replace backslashes with forward slashes)
+                    modelFilename = modelFilename.Replace('\\', '/');
+                    
+                    // Extract just the filename (strip any subdirectory paths)
+                    modelFilename = Path.GetFileName(modelFilename);
+                    
+                    // Normalize entire filename to lowercase for consistency with cache files
+                    // This ensures "Contain_crate_02.NIF" becomes "contain_crate_02.nif" to match cache
+                    // Cache files are typically stored in lowercase
+                    modelFilename = modelFilename.ToLowerInvariant();
+                }
+            }
+            
+            // If STAT and CONT record lookups failed, try to look up LIGH (light) record
+            if (string.IsNullOrEmpty(modelFilename))
+            {
+                // Use the cleaned modelId (which should match how it's stored in TESLightManager)
+                // Log before lookup to verify we're searching for the right thing
+                if (modelFilename.Contains("light_de_streetlight") || modelFilename.Contains("streetlight"))
+                {
+                    UnityEngine.Debug.LogError($"[PlaceStatics] Attempting to lookup light with modelId: '{modelFilename}' (length: {modelFilename?.Length ?? 0})");
+                }
+                TESLightManager.LightEntry lightEntry = TESLightManager.GetLight(modelId);
+                
+                // If not found, try with the original objectId.objectId (before cleaning)
+                // GetLight will normalize it, so this should work if there was a cleaning mismatch
+                if (lightEntry == null && objectId != null && !string.IsNullOrEmpty(objectId.objectId))
+                {
+                    string originalId = objectId.objectId;
+                    lightEntry = TESLightManager.GetLight(originalId);
+                    if (lightEntry != null)
+                    {
+                        UnityEngine.Debug.LogWarning($"[PlaceStatics] Found light using original ID '{originalId}' (cleaned was '{modelId}')");
+                    }
+                }
+                
+                #if UNITY_EDITOR
+                if (modelId.Contains("light_de_streetlight") || modelId.Contains("streetlight") || modelId.Contains("light_"))
+                {
+                    UnityEngine.Debug.LogWarning($"PlaceStatics: Looking up light '{modelId}'. Found: {lightEntry != null}. Total lights in library: {TESLightManager.Count}");
+                    if (lightEntry == null)
+                    {
+                        // Try to find any light with similar name
+                        var allLights = TESLightManager.GetAllLights();
+                        var matchingLights = allLights.Where(l => l.LightId != null && 
+                            (l.LightId.Contains("streetlight", StringComparison.OrdinalIgnoreCase) || 
+                             l.LightId.Contains(modelId, StringComparison.OrdinalIgnoreCase) ||
+                             modelId.Contains(l.LightId, StringComparison.OrdinalIgnoreCase))).Take(5);
+                        if (matchingLights.Any())
+                        {
+                            UnityEngine.Debug.LogWarning($"PlaceStatics: Found similar lights: {string.Join(", ", matchingLights.Select(l => l.LightId))}");
+                        }
+                    }
+                }
+                #endif
+                
+                if (lightEntry != null && !string.IsNullOrEmpty(lightEntry.ModelFilename))
+                {
+                    UnityEngine.Debug.LogWarning($"Model filename '{lightEntry.ModelFilename}' is found");
+                    // Clean the model filename from light (same pattern as containers)
+                    modelFilename = lightEntry.ModelFilename.TrimEnd('\0', ' ', '\t', '\r', '\n');
+                    modelFilename = modelFilename.Replace("\0", "");
+                    modelFilename = modelFilename.Trim();
+                    
+                    // Normalize path separators (replace backslashes with forward slashes)
+                    modelFilename = modelFilename.Replace('\\', '/');
+                    
+                    // Extract just the filename (strip any subdirectory paths)
+                    modelFilename = Path.GetFileName(modelFilename);
+                    
+                    // Normalize entire filename to lowercase for consistency with cache files
+                    // This ensures "Light_de_streetlight_01.NIF" becomes "light_de_streetlight_01.nif" to match cache
+                    // Cache files are typically stored in lowercase
+                    modelFilename = modelFilename.ToLowerInvariant();
+                    
+                    // Note: The NIFLoader will check TESNifLibrary cache first, then file system/BSA
+                    // and cache the result in TESNifLibrary for reuse, just like containers and NPCs
                 }
             }
 
@@ -1911,7 +2156,7 @@ namespace ESMSharp.TES3Terrain
 
             if (string.IsNullOrEmpty(modelFilename))
             {
-                UnityEngine.Debug.LogWarning($"Could not find model for ID '{modelId}' (checked STAT records and cache directory)");
+                UnityEngine.Debug.LogWarning($"Could not find model for ID '{modelId}' (checked STAT records, CONT records, LIGH records, and cache directory)");
                 failedCount++;
                 return;
             }
@@ -2262,19 +2507,48 @@ namespace ESMSharp.TES3Terrain
                     }
                 }
 
-                // Case-insensitive fallback
+                // Case-insensitive fallback - try multiple case variations
                 if (foundPath == null)
                 {
-                    string modelLower = modelId.ToLower() + ".nif";
+                    string modelLower = modelId.ToLower();
+                    string modelUpper = modelId.ToUpper();
+                    string modelOriginal = modelId; // Keep original case
+                    
+                    // Try various case combinations
+                    string[] caseVariations = new string[]
+                    {
+                        modelLower + ".nif",
+                        modelUpper + ".NIF",
+                        modelOriginal + ".nif",
+                        modelOriginal + ".NIF"
+                    };
+                    
                     foreach (string bsaFileName in bsaFileNames)
                     {
-                        if (bsaFileName.ToLower().EndsWith("\\" + modelLower) ||
-                            bsaFileName.ToLower().EndsWith("/" + modelLower) ||
-                            bsaFileName.ToLower() == modelLower)
+                        string bsaFileNameLower = bsaFileName.ToLower();
+                        string bsaFileNameNoExt = Path.GetFileNameWithoutExtension(bsaFileName);
+                        
+                        // Check if filename (without extension) matches any case variation
+                        foreach (string caseVar in caseVariations)
                         {
-                            foundPath = bsaFileName;
-                            break;
+                            string caseVarNoExt = Path.GetFileNameWithoutExtension(caseVar);
+                            if (string.Equals(bsaFileNameNoExt, caseVarNoExt, StringComparison.OrdinalIgnoreCase))
+                            {
+                                // Also check path variations
+                                if (bsaFileNameLower.EndsWith("\\" + caseVar.ToLower()) ||
+                                    bsaFileNameLower.EndsWith("/" + caseVar.ToLower()) ||
+                                    bsaFileNameLower == caseVar.ToLower() ||
+                                    bsaFileNameLower.EndsWith("\\meshes\\" + caseVar.ToLower()) ||
+                                    bsaFileNameLower.EndsWith("/meshes/" + caseVar.ToLower()))
+                                {
+                                    foundPath = bsaFileName;
+                                    break;
+                                }
+                            }
                         }
+                        
+                        if (foundPath != null)
+                            break;
                     }
                 }
 
@@ -2366,7 +2640,7 @@ namespace ESMSharp.TES3Terrain
                 // Check if we've already loaded this model (mesh instancing) - use global library
                 string baseFilenameNoExt = Path.GetFileNameWithoutExtension(baseFilename);
                 TESNifLibrary.NifEntry cachedEntry = TESNifLibrary.GetModelByBaseFilename(baseFilenameNoExt);
-                if (cachedEntry != null)
+                if (cachedEntry != null && cachedEntry.Model != null)
                 {
                     // Instantiate the existing model instead of loading again
                     GameObject instanceObj = GameObject.Instantiate(cachedEntry.Model);
@@ -2438,11 +2712,18 @@ namespace ESMSharp.TES3Terrain
 
                 // Store the loaded model in global library for future instancing
                 // IMPORTANT: Store the model BEFORE applying any instance-specific transforms
-                // The template should remain in its base state (no position, rotation, scale, or reflection fix)
-                // Each instance (including this first one) will get its own transforms applied
+                // The model from NIFLoader should be in a clean state (no transforms applied)
+                // We check if it's already in the library first to avoid storing duplicates
                 string staticId = objectId?.objectId?.TrimEnd('\0');
                 string staticName = staticId; // Use ID as name if no separate name available
-                TESNifLibrary.AddModel(staticId, staticName, modelFilename, baseFilenameNoExt, modelObj, combineMeshes: false);
+                
+                TESNifLibrary.NifEntry existingEntry = TESNifLibrary.GetModelByBaseFilename(baseFilenameNoExt);
+                if (existingEntry == null)
+                {
+                    // Store the model in library (this is the first time loading this model)
+                    // The model should be in a clean state from NIFLoader
+                    TESNifLibrary.AddModel(staticId, staticName, modelFilename, baseFilenameNoExt, modelObj, combineMeshes: false);
+                }
 
                 // Set position and rotation BEFORE parenting
                 modelObj.transform.position = unityPosition;
@@ -2509,8 +2790,52 @@ namespace ESMSharp.TES3Terrain
         }
 
         /// <summary>
-        /// Adds LOD support to a static object, including Unity LOD Group with decimated meshes
+        /// Attaches TESLight component to a GameObject with the provided LightEntry
         /// </summary>
+        private void AttachLightComponent(GameObject obj, TESLightManager.LightEntry lightEntry)
+        {
+            if (obj == null || lightEntry == null)
+                return;
+            
+            // Add TESLight component and initialize it
+            TESLight tesLight = obj.GetComponent<TESLight>();
+            if (tesLight == null)
+            {
+                tesLight = obj.AddComponent<TESLight>();
+            }
+            tesLight.Initialize(lightEntry);
+            
+            UnityEngine.Debug.Log($"[PlaceStatics] Attached TESLight component to '{obj.name}' with light '{lightEntry.LightId}'");
+        }
+        
+        /// <summary>
+        /// Attaches TESLight component to a GameObject if it corresponds to a light record (lookup by ID)
+        /// </summary>
+        private void AttachLightComponentIfNeeded(GameObject obj, string modelId)
+        {
+            if (obj == null || string.IsNullOrEmpty(modelId))
+                return;
+            
+            // Check if this model ID corresponds to a light
+            TESLightManager.LightEntry lightEntry = TESLightManager.GetLight(modelId);
+            if (lightEntry == null)
+            {
+                // Try cleaned version
+                string cleanedId = modelId.TrimEnd('\0', ' ', '\t', '\r', '\n');
+                cleanedId = cleanedId.Replace("\0", "");
+                cleanedId = new string(cleanedId.Where(c => c != '\0').ToArray()).Trim();
+                if (!string.Equals(modelId, cleanedId, StringComparison.OrdinalIgnoreCase))
+                {
+                    lightEntry = TESLightManager.GetLight(cleanedId);
+                }
+            }
+            
+            if (lightEntry != null)
+            {
+                AttachLightComponent(obj, lightEntry);
+            }
+        }
+        
         private void AddLODToObject(GameObject obj)
         {
             // Check if we should create Unity LOD Groups (requires meshes to be decimated)
@@ -2789,7 +3114,7 @@ namespace ESMSharp.TES3Terrain
                 cachedEntry = TESNifLibrary.GetModelByBaseFilename(baseFilenameLower);
             }
             
-            if (cachedEntry != null)
+            if (cachedEntry != null && cachedEntry.Model != null)
             {
                 GameObject instantiatedModel = GameObject.Instantiate(cachedEntry.Model);
                 instantiatedModel.name = baseFilenameNoExt;
@@ -3169,7 +3494,7 @@ namespace ESMSharp.TES3Terrain
                 cachedEntry = TESNifLibrary.GetModelByBaseFilename(baseFilenameNoExtLower);
             }
             
-            if (cachedEntry != null)
+            if (cachedEntry != null && cachedEntry.Model != null)
             {
                 // Instantiate the existing model
                 GameObject instantiatedModel = GameObject.Instantiate(cachedEntry.Model);
@@ -3287,7 +3612,7 @@ namespace ESMSharp.TES3Terrain
             // Check cache first (thread-safe read)
             string baseFilenameNoExt = Path.GetFileNameWithoutExtension(modelFilename);
             TESNifLibrary.NifEntry cachedEntry = TESNifLibrary.GetModelByBaseFilename(baseFilenameNoExt);
-            if (cachedEntry != null)
+            if (cachedEntry != null && cachedEntry.Model != null)
             {
                 // Return cached model immediately
                 result = GameObject.Instantiate(cachedEntry.Model);
@@ -3336,6 +3661,21 @@ namespace ESMSharp.TES3Terrain
 
             if (nifData == null)
             {
+                // File not in cache, try to extract from BSA
+                string baseFilenameNoExtForBSA = Path.GetFileNameWithoutExtension(modelFilename);
+                string extractedFilename = TryExtractFromBSA(baseFilenameNoExtForBSA);
+                
+                if (!string.IsNullOrEmpty(extractedFilename))
+                {
+                    // File was extracted, try loading again
+                    string normalizedExtractedFilename = Path.GetFileName(extractedFilename);
+                    normalizedExtractedFilename = normalizedExtractedFilename.Replace('\\', '/');
+                    
+                    // Try loading the extracted file
+                    yield return LoadNIFModelCoroutine(normalizedExtractedFilename, combineMeshes, onComplete);
+                    yield break;
+                }
+                
                 UnityEngine.Debug.LogWarning($"LoadNIFModel: File not found: {modelFilename}");
                 onComplete?.Invoke(null);
                 yield break;
@@ -3371,7 +3711,7 @@ namespace ESMSharp.TES3Terrain
             // Check cache first (thread-safe read)
             string baseFilenameNoExt = Path.GetFileNameWithoutExtension(modelFilename);
             TESNifLibrary.NifEntry cachedEntry = TESNifLibrary.GetModelByBaseFilename(baseFilenameNoExt);
-            if (cachedEntry != null)
+            if (cachedEntry != null && cachedEntry.Model != null)
             {
                 // Return cached model immediately
                 GameObject instance = GameObject.Instantiate(cachedEntry.Model);
@@ -3399,6 +3739,20 @@ namespace ESMSharp.TES3Terrain
                 byte[] nifData = fileLoadTask.Result;
                 if (nifData == null)
                 {
+                    // File not in cache, try to extract from BSA
+                    string baseFilenameNoExtForBSA = Path.GetFileNameWithoutExtension(modelFilename);
+                    string extractedFilename = TryExtractFromBSA(baseFilenameNoExtForBSA);
+                    
+                    if (!string.IsNullOrEmpty(extractedFilename))
+                    {
+                        // File was extracted, try loading again
+                        string normalizedExtractedFilename = Path.GetFileName(extractedFilename);
+                        normalizedExtractedFilename = normalizedExtractedFilename.Replace('\\', '/');
+                        
+                        // Try loading the extracted file (recursive call, but should be in cache now)
+                        return LoadNIFModel(normalizedExtractedFilename, combineMeshes);
+                    }
+                    
                     UnityEngine.Debug.LogWarning($"LoadNIFModel: File not found: {modelFilename}");
                     return null;
                 }
@@ -3419,30 +3773,52 @@ namespace ESMSharp.TES3Terrain
         /// </summary>
         private string FindNIFInCache(string esm, string modelFilename)
         {
-            // Normalize filename
+            if (string.IsNullOrEmpty(modelFilename))
+                return null;
+            
+            // Normalize filename - extract just the filename part
             string normalizedFilename = modelFilename?.Replace('\\', '/');
             normalizedFilename = Path.GetFileName(normalizedFilename);
             
+            // Try exact match first (with normalized path separators)
             string cachePath = Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Models", esm, normalizedFilename);
-            
+            cachePath = cachePath.Replace('\\', '/');
             if (System.IO.File.Exists(cachePath))
                 return cachePath;
 
-            // Try original filename
+            // Try original filename as-is
             string originalPath = Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Models", esm, modelFilename);
+            originalPath = originalPath.Replace('\\', '/');
             if (System.IO.File.Exists(originalPath))
                 return originalPath;
 
-            // Try case-insensitive search
+            // Case-insensitive search - this is the most reliable method
             string cacheDir = Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Models", esm);
+            cacheDir = cacheDir.Replace('\\', '/');
             if (System.IO.Directory.Exists(cacheDir))
             {
+                // Get all NIF files (case-insensitive pattern matching)
                 string[] files = System.IO.Directory.GetFiles(cacheDir, "*.nif", System.IO.SearchOption.TopDirectoryOnly);
-                string searchFilename = Path.GetFileName(modelFilename);
-                foreach (string file in files)
+                string[] filesUpper = System.IO.Directory.GetFiles(cacheDir, "*.NIF", System.IO.SearchOption.TopDirectoryOnly);
+                
+                // Combine both patterns (some systems might return different results)
+                HashSet<string> allFiles = new HashSet<string>(files);
+                foreach (string file in filesUpper)
+                {
+                    allFiles.Add(file);
+                }
+                
+                string searchFilename = Path.GetFileName(normalizedFilename);
+                string searchFilenameLower = searchFilename.ToLowerInvariant();
+                
+                foreach (string file in allFiles)
                 {
                     string fileName = Path.GetFileName(file);
-                    if (string.Equals(fileName, searchFilename, StringComparison.OrdinalIgnoreCase))
+                    string fileNameLower = fileName.ToLowerInvariant();
+                    
+                    // Case-insensitive comparison
+                    if (string.Equals(fileName, searchFilename, StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(fileNameLower, searchFilenameLower, StringComparison.Ordinal))
                     {
                         return file;
                     }

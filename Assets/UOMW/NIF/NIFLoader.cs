@@ -216,12 +216,15 @@ namespace ESMSharp.NIF
             normalizedFilename = System.IO.Path.GetFileName(normalizedFilename); // Get just the filename, ignore any path
             
             string cachePath = System.IO.Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Models", _esm, normalizedFilename);
+            // Normalize path separators for consistency (Windows uses backslashes, but we want forward slashes)
+            cachePath = cachePath.Replace('\\', '/');
             
             // Also try with original filename in case normalization changed it
             if (!File.Exists(cachePath))
             {
                 // Try original filename
                 string originalPath = System.IO.Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Models", _esm, modelFilename);
+                originalPath = originalPath.Replace('\\', '/');
                 if (File.Exists(originalPath))
                 {
                     cachePath = originalPath;
@@ -230,6 +233,7 @@ namespace ESMSharp.NIF
                 {
                     // Try case-insensitive search in cache directory
                     string cacheDir = System.IO.Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Models", _esm);
+                    cacheDir = cacheDir.Replace('\\', '/');
                     if (Directory.Exists(cacheDir))
                     {
                         string[] files = Directory.GetFiles(cacheDir, "*.nif", SearchOption.TopDirectoryOnly);
@@ -247,7 +251,10 @@ namespace ESMSharp.NIF
                     
                     if (!File.Exists(cachePath))
                     {
-                        UnityEngine.Debug.LogError($"NIF file not found: {cachePath} (searched for: {modelFilename}, normalized: {normalizedFilename})");
+                        // Normalize path separators in error message for consistency
+                        string normalizedCachePath = cachePath.Replace('\\', '/');
+                        // Use LogWarning instead of LogError - missing files are not fatal, loading should continue
+                        UnityEngine.Debug.LogWarning($"NIF file not found: {normalizedCachePath} (searched for: {modelFilename}, normalized: {normalizedFilename})");
                         return null;
                     }
                 }

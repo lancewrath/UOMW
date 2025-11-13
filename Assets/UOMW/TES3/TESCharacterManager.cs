@@ -151,6 +151,13 @@ namespace ESMSharp.TES3
                     string cleanedModelId = modl.model?.TrimEnd('\0', ' ', '\t', '\r', '\n');
                     cleanedModelId = cleanedModelId?.Replace("\0", "");
                     cleanedModelId = string.IsNullOrEmpty(cleanedModelId) ? null : new string(cleanedModelId.Where(c => c != '\0').ToArray()).Trim();
+                    
+                    // Normalize path separators (replace backslashes with forward slashes) for consistency
+                    if (!string.IsNullOrEmpty(cleanedModelId))
+                    {
+                        cleanedModelId = cleanedModelId.Replace('\\', '/');
+                    }
+                    
                     entry.ModelFilename = cleanedModelId;
                     
                     // Debug: Log MODL values to help diagnose missing body parts
@@ -175,6 +182,13 @@ namespace ESMSharp.TES3
                     string cleanedHeadId = bnam.name?.TrimEnd('\0', ' ', '\t', '\r', '\n');
                     cleanedHeadId = cleanedHeadId?.Replace("\0", "");
                     cleanedHeadId = string.IsNullOrEmpty(cleanedHeadId) ? null : new string(cleanedHeadId.Where(c => c != '\0').ToArray()).Trim();
+                    
+                    // Normalize path separators (replace backslashes with forward slashes) for consistency
+                    if (!string.IsNullOrEmpty(cleanedHeadId))
+                    {
+                        cleanedHeadId = cleanedHeadId.Replace('\\', '/');
+                    }
+                    
                     entry.HeadModel = cleanedHeadId;
                 }
                 else if (subrec is SubRecordNPCKNAM knam)
@@ -183,6 +197,13 @@ namespace ESMSharp.TES3
                     string cleanedHairId = knam.name?.TrimEnd('\0', ' ', '\t', '\r', '\n');
                     cleanedHairId = cleanedHairId?.Replace("\0", "");
                     cleanedHairId = string.IsNullOrEmpty(cleanedHairId) ? null : new string(cleanedHairId.Where(c => c != '\0').ToArray()).Trim();
+                    
+                    // Normalize path separators (replace backslashes with forward slashes) for consistency
+                    if (!string.IsNullOrEmpty(cleanedHairId))
+                    {
+                        cleanedHairId = cleanedHairId.Replace('\\', '/');
+                    }
+                    
                     entry.HairModel = cleanedHairId;
                 }
                 else if (subrec is SubRecordNPCSCRI scri)
@@ -289,6 +310,13 @@ namespace ESMSharp.TES3
                     string cleanedModel = modl.model?.TrimEnd('\0', ' ', '\t', '\r', '\n');
                     cleanedModel = cleanedModel?.Replace("\0", "");
                     cleanedModel = string.IsNullOrEmpty(cleanedModel) ? null : new string(cleanedModel.Where(c => c != '\0').ToArray()).Trim();
+                    
+                    // Normalize path separators (replace backslashes with forward slashes) for consistency
+                    if (!string.IsNullOrEmpty(cleanedModel))
+                    {
+                        cleanedModel = cleanedModel.Replace('\\', '/');
+                    }
+                    
                     entry.ModelFilename = cleanedModel;
                 }
                 else if (subrec is SubRecordBodyFNAM fnam)

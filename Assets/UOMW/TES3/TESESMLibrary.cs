@@ -100,6 +100,7 @@ namespace ESMSharp.TES3
             RebuildMergedRecords();
             
             Debug.Log($"TESESMLibrary: Loaded {loadedCount} ESM file(s) from {dataFolder}");
+            Debug.Log($"TESESMLibrary: Summary - Total lights: {TESLightManager.Count}, Total containers: {TESContainerLibrary.Count}, Total NPCs: {TESCharacterManager.NPCCount}");
             return loadedCount;
         }
         
@@ -246,6 +247,40 @@ namespace ESMSharp.TES3
                                 TESCharacterManager.AddNPC(recordNPC, esmFilename);
                                 break;
 
+                            case "CONT":
+                                RecordCont contrecord = new RecordCont();
+                                contrecord.Deserialize(reader, name);
+                                mRecord = contrecord;
+                                
+                                // Register container with TESContainerLibrary
+                                TESContainerLibrary.AddContainer(contrecord, esmFilename);
+                                break;
+
+                            case "LIGH":
+                                RecordLight lightrecord = new RecordLight();
+                                lightrecord.Deserialize(reader, name);
+                                mRecord = lightrecord;
+                                
+                                // Register light with TESLightManager
+                                var lightEntry = TESLightManager.AddLight(lightrecord, esmFilename);
+                                #if UNITY_EDITOR
+                                if (lightEntry == null)
+                                {
+                                    // Try to extract the name for debugging
+                                    string debugName = "unknown";
+                                    foreach (var subrec in lightrecord.subRecords)
+                                    {
+                                        if (subrec is SubRecordLightNAME nameRec)
+                                        {
+                                            debugName = nameRec.name ?? "null";
+                                            break;
+                                        }
+                                    }
+                                    Debug.LogWarning($"TESESMLibrary: Failed to add LIGH record with NAME '{debugName}' from {esmFilename}");
+                                }
+                                #endif
+                                break;
+
                             default:
                                 mRecord = new Record();
                                 mRecord.Deserialize(reader, name);
@@ -277,6 +312,14 @@ namespace ESMSharp.TES3
                 RebuildMergedRecords();
                 
                 Debug.Log($"TESESMLibrary: Loaded ESM '{esmFilename}' ({entry.Records.Length} records) at load order {loadOrder}");
+                
+                // Log summary of registered records
+                int lightCount = entry.RecordsByType.ContainsKey("LIGH") ? entry.RecordsByType["LIGH"].Count : 0;
+                if (lightCount > 0)
+                {
+                    Debug.Log($"TESESMLibrary: Registered {lightCount} LIGH record(s) from '{esmFilename}'. Total lights in library: {TESLightManager.Count}");
+                }
+                
                 return true;
             }
             catch (Exception ex)
