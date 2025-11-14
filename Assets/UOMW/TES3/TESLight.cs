@@ -109,10 +109,21 @@ namespace ESMSharp.TES3Terrain
             _baseColor = lightColor;
             _unityLight.color = lightColor;
             
-            // Set intensity (using value as base intensity, scaled appropriately)
-            // Morrowind light value is typically 0-255, Unity intensity is typically 0-8 for point lights
-            _baseIntensity = (lightData.value / 255f) * 2f; // Scale to reasonable Unity intensity
-            _unityLight.intensity = _baseIntensity;
+            // Set intensity using weight (light weight/brightness) as primary factor, with value as fallback
+            // Weight is typically a float representing light intensity/brightness
+            // Unity intensity is typically 0-8 for point lights
+            if (lightData.weight > 0f)
+            {
+                // Use weight directly, scaled to Unity intensity range (weight is typically 0-1 or similar)
+                _baseIntensity = lightData.weight * 8f; // Scale weight to Unity intensity range
+            }
+            else
+            {
+                // Fallback to value if weight is 0 or negative
+                // Morrowind light value is typically 0-255, Unity intensity is typically 0-8 for point lights
+                _baseIntensity = (lightData.value / 255f) * 2f; // Scale to reasonable Unity intensity
+            }
+            _unityLight.intensity = Mathf.Max(_baseIntensity, 0.1f); // Ensure minimum intensity
             
             // Handle negative light flag (inverted lighting)
             if ((lightData.flags & FLAG_NEGATIVE) != 0)

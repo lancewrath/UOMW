@@ -830,8 +830,9 @@ namespace ESMSharp.TES3Terrain
                     instanceObj.transform.position = instancePosition;
                     instanceObj.transform.rotation = instanceRotation;
                     
-                    // XSCL scale multiplies the base GameObject scale (same as statics)
-                    Vector3 instanceBaseScale = new Vector3(TESGlobals.MORROWIND_TO_STATIC_SCALE, TESGlobals.MORROWIND_TO_STATIC_SCALE, TESGlobals.MORROWIND_TO_STATIC_SCALE);
+                    // Trees are character-sized (128 Morrowind units), so use MORROWIND_TO_STATIC_SCALE * 128 * XSCL
+                    // MORROWIND_TO_STATIC_SCALE * 128 = 1.0 (same as NPCs)
+                    Vector3 instanceBaseScale = new Vector3(TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f, TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f, TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f);
                     // Apply XSCL scale (handle negative scales like statics)
                     if (scale < 0)
                     {
@@ -909,18 +910,19 @@ namespace ESMSharp.TES3Terrain
                 treeModel.transform.position = unityPosition;
                 treeModel.transform.rotation = unityRotation;
                 
-                // XSCL scale multiplies the base GameObject scale (same as statics)
-                Vector3 modelBaseScale = treeModel.transform.localScale;
+                // Trees are character-sized (128 Morrowind units), so use MORROWIND_TO_STATIC_SCALE * 128 * XSCL
+                // MORROWIND_TO_STATIC_SCALE * 128 = 1.0 (same as NPCs)
+                Vector3 treeBaseScale = new Vector3(TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f, TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f, TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f);
                 // Apply XSCL scale (handle negative scales like statics)
                 if (scale < 0)
                 {
                     // Negative scale = mirror object (use absolute value)
-                    treeModel.transform.localScale = modelBaseScale * Mathf.Abs(scale);
+                    treeModel.transform.localScale = treeBaseScale * Mathf.Abs(scale);
                 }
                 else
                 {
                     // Positive scale = normal scaling
-                    treeModel.transform.localScale = modelBaseScale * scale;
+                    treeModel.transform.localScale = treeBaseScale * scale;
                 }
                 
                 // Set name
@@ -985,7 +987,9 @@ namespace ESMSharp.TES3Terrain
                     instanceObj.transform.position = instancePosition;
                     instanceObj.transform.rotation = instanceRotation;
                     
-                    Vector3 instanceBaseScale = new Vector3(TESGlobals.MORROWIND_TO_STATIC_SCALE, TESGlobals.MORROWIND_TO_STATIC_SCALE, TESGlobals.MORROWIND_TO_STATIC_SCALE);
+                    // Trees are character-sized (128 Morrowind units), so use MORROWIND_TO_STATIC_SCALE * 128 * XSCL
+                    // MORROWIND_TO_STATIC_SCALE * 128 = 1.0 (same as NPCs)
+                    Vector3 instanceBaseScale = new Vector3(TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f, TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f, TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f);
                     instanceObj.transform.localScale = instanceBaseScale * (scale < 0 ? Mathf.Abs(scale) : scale);
                     
                     if (objectId != null && !string.IsNullOrEmpty(objectId.objectId))
@@ -1042,8 +1046,10 @@ namespace ESMSharp.TES3Terrain
                 treeModel.transform.position = unityPosition;
                 treeModel.transform.rotation = unityRotation;
                 
-                Vector3 modelBaseScale = treeModel.transform.localScale;
-                treeModel.transform.localScale = modelBaseScale * (scale < 0 ? Mathf.Abs(scale) : scale);
+                // Trees are character-sized (128 Morrowind units), so use MORROWIND_TO_STATIC_SCALE * 128 * XSCL
+                // MORROWIND_TO_STATIC_SCALE * 128 = 1.0 (same as NPCs)
+                Vector3 instanceBaseScale = new Vector3(TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f, TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f, TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f);
+                treeModel.transform.localScale = instanceBaseScale * (scale < 0 ? Mathf.Abs(scale) : scale);
                 
                 if (objectId != null && !string.IsNullOrEmpty(objectId.objectId))
                     treeModel.name = objectId.objectId.TrimEnd('\0');
@@ -1098,7 +1104,9 @@ namespace ESMSharp.TES3Terrain
                     instanceObj.transform.position = instancePosition;
                     instanceObj.transform.rotation = instanceRotation;
                     
-                    Vector3 instanceBaseScale = new Vector3(TESGlobals.MORROWIND_TO_STATIC_SCALE, TESGlobals.MORROWIND_TO_STATIC_SCALE, TESGlobals.MORROWIND_TO_STATIC_SCALE);
+                    // Grass is character-sized (128 Morrowind units), so use MORROWIND_TO_STATIC_SCALE * 128 * XSCL
+                    // MORROWIND_TO_STATIC_SCALE * 128 = 1.0 (same as NPCs and trees)
+                    Vector3 instanceBaseScale = new Vector3(TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f, TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f, TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f);
                     instanceObj.transform.localScale = instanceBaseScale * (scale < 0 ? Mathf.Abs(scale) : scale);
                     
                     if (objectId != null && !string.IsNullOrEmpty(objectId.objectId))
@@ -1172,8 +1180,10 @@ namespace ESMSharp.TES3Terrain
                 grassModel.transform.position = unityPosition;
                 grassModel.transform.rotation = unityRotation;
                 
-                Vector3 modelBaseScale = grassModel.transform.localScale;
-                grassModel.transform.localScale = modelBaseScale * (scale < 0 ? Mathf.Abs(scale) : scale);
+                // Grass is character-sized (128 Morrowind units), so use MORROWIND_TO_STATIC_SCALE * 128 * XSCL
+                // MORROWIND_TO_STATIC_SCALE * 128 = 1.0 (same as NPCs and trees)
+                Vector3 grassBaseScale = new Vector3(TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f, TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f, TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f);
+                grassModel.transform.localScale = grassBaseScale * (scale < 0 ? Mathf.Abs(scale) : scale);
                 
                 if (objectId != null && !string.IsNullOrEmpty(objectId.objectId))
                     grassModel.name = objectId.objectId.TrimEnd('\0');
@@ -1257,6 +1267,11 @@ namespace ESMSharp.TES3Terrain
                     // Check if this is a light and attach TESLight component
                     if (lightEntry != null)
                     {
+                        // Debug logging for streetlight lights
+                        if (lightEntry.LightId != null && (lightEntry.LightId.Contains("streetlight") || lightEntry.LightId.Contains("light_de_streetlight")))
+                        {
+                            UnityEngine.Debug.LogWarning($"[PlaceStatics] PlaceStaticObjectCoroutine (cached): Attaching light component for '{lightEntry.LightId}'");
+                        }
                         AttachLightComponent(instanceObj, lightEntry);
                     }
                     else if (objectId != null && !string.IsNullOrEmpty(objectId.objectId))
@@ -1265,7 +1280,26 @@ namespace ESMSharp.TES3Terrain
                         string lightId = objectId.objectId.TrimEnd('\0', ' ', '\t', '\r', '\n');
                         lightId = lightId.Replace("\0", "");
                         lightId = new string(lightId.Where(c => c != '\0').ToArray()).Trim();
+                        
+                        // Debug logging for streetlight lights
+                        if (lightId.Contains("streetlight") || lightId.Contains("light_de_streetlight"))
+                        {
+                            UnityEngine.Debug.LogWarning($"[PlaceStatics] PlaceStaticObjectCoroutine (cached): lightEntry was null, trying fallback lookup for '{lightId}'");
+                        }
+                        
                         AttachLightComponentIfNeeded(instanceObj, lightId);
+                    }
+                    else
+                    {
+                        // Debug logging for streetlight lights
+                        if (objectId != null && !string.IsNullOrEmpty(objectId.objectId))
+                        {
+                            string objId = objectId.objectId;
+                            if (objId.Contains("streetlight") || objId.Contains("light_de_streetlight"))
+                            {
+                                UnityEngine.Debug.LogWarning($"[PlaceStatics] PlaceStaticObjectCoroutine (cached): lightEntry was null and objectId was null/empty for potential light '{objId}'");
+                            }
+                        }
                     }
                     
                     if (parent != null)
@@ -1345,6 +1379,11 @@ namespace ESMSharp.TES3Terrain
                 // Check if this is a light and attach TESLight component
                 if (lightEntry != null)
                 {
+                    // Debug logging for streetlight lights
+                    if (lightEntry.LightId != null && (lightEntry.LightId.Contains("streetlight") || lightEntry.LightId.Contains("light_de_streetlight")))
+                    {
+                        UnityEngine.Debug.LogWarning($"[PlaceStatics] PlaceStaticObjectCoroutine (new): Attaching light component for '{lightEntry.LightId}'");
+                    }
                     AttachLightComponent(modelObj, lightEntry);
                 }
                 else if (objectId != null && !string.IsNullOrEmpty(objectId.objectId))
@@ -1353,7 +1392,26 @@ namespace ESMSharp.TES3Terrain
                     string lightId = objectId.objectId.TrimEnd('\0', ' ', '\t', '\r', '\n');
                     lightId = lightId.Replace("\0", "");
                     lightId = new string(lightId.Where(c => c != '\0').ToArray()).Trim();
+                    
+                    // Debug logging for streetlight lights
+                    if (lightId.Contains("streetlight") || lightId.Contains("light_de_streetlight"))
+                    {
+                        UnityEngine.Debug.LogWarning($"[PlaceStatics] PlaceStaticObjectCoroutine (new): lightEntry was null, trying fallback lookup for '{lightId}'");
+                    }
+                    
                     AttachLightComponentIfNeeded(modelObj, lightId);
+                }
+                else
+                {
+                    // Debug logging for streetlight lights
+                    if (objectId != null && !string.IsNullOrEmpty(objectId.objectId))
+                    {
+                        string objId = objectId.objectId;
+                        if (objId.Contains("streetlight") || objId.Contains("light_de_streetlight"))
+                        {
+                            UnityEngine.Debug.LogWarning($"[PlaceStatics] PlaceStaticObjectCoroutine (new): lightEntry was null and objectId was null/empty for potential light '{objId}'");
+                        }
+                    }
                 }
                 
                 if (parent != null)
@@ -1489,8 +1547,9 @@ namespace ESMSharp.TES3Terrain
                     instanceObj.transform.position = instancePosition;
                     instanceObj.transform.rotation = instanceRotation;
                     
-                    // XSCL scale multiplies the base GameObject scale (same as statics)
-                    Vector3 instanceBaseScale = new Vector3(TESGlobals.MORROWIND_TO_STATIC_SCALE, TESGlobals.MORROWIND_TO_STATIC_SCALE, TESGlobals.MORROWIND_TO_STATIC_SCALE);
+                    // Grass is character-sized (128 Morrowind units), so use MORROWIND_TO_STATIC_SCALE * 128 * XSCL
+                    // MORROWIND_TO_STATIC_SCALE * 128 = 1.0 (same as NPCs and trees)
+                    Vector3 instanceBaseScale = new Vector3(TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f, TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f, TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f);
                     // Apply XSCL scale (handle negative scales like statics)
                     if (scale < 0)
                     {
@@ -1589,18 +1648,19 @@ namespace ESMSharp.TES3Terrain
                 grassModel.transform.position = unityPosition;
                 grassModel.transform.rotation = unityRotation;
                 
-                // XSCL scale multiplies the base GameObject scale (same as statics)
-                Vector3 modelBaseScale = grassModel.transform.localScale;
+                // Grass is character-sized (128 Morrowind units), so use MORROWIND_TO_STATIC_SCALE * 128 * XSCL
+                // MORROWIND_TO_STATIC_SCALE * 128 = 1.0 (same as NPCs and trees)
+                Vector3 grassBaseScale = new Vector3(TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f, TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f, TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f);
                 // Apply XSCL scale (handle negative scales like statics)
                 if (scale < 0)
                 {
                     // Negative scale = mirror object (use absolute value)
-                    grassModel.transform.localScale = modelBaseScale * Mathf.Abs(scale);
+                    grassModel.transform.localScale = grassBaseScale * Mathf.Abs(scale);
                 }
                 else
                 {
                     // Positive scale = normal scaling
-                    grassModel.transform.localScale = modelBaseScale * scale;
+                    grassModel.transform.localScale = grassBaseScale * scale;
                 }
                 
                 // Set name
@@ -1782,28 +1842,37 @@ namespace ESMSharp.TES3Terrain
                 }
             }
             
-            // If STAT and CONT record lookups failed, try to look up LIGH (light) record
+            // Always check for LIGH (light) record - even if STAT/CONT was found, the object ID might still be a light
+            // This ensures lights get the TESLight component attached even if they have a STAT record
             TESLightManager.LightEntry foundLightEntry = null; // Store for later component attachment
-            if (string.IsNullOrEmpty(modelFilename))
+            // Use the cleaned modelId (which should match how it's stored in TESLightManager)
+            TESLightManager.LightEntry lightEntry = TESLightManager.GetLight(modelId);
+            
+            // If not found, try with the original objectId.objectId (before cleaning)
+            // GetLight will normalize it, so this should work if there was a cleaning mismatch
+            if (lightEntry == null && objectId != null && !string.IsNullOrEmpty(objectId.objectId))
             {
-                // Use the cleaned modelId (which should match how it's stored in TESLightManager)
-                TESLightManager.LightEntry lightEntry = TESLightManager.GetLight(modelId);
-                
-                // If not found, try with the original objectId.objectId (before cleaning)
-                // GetLight will normalize it, so this should work if there was a cleaning mismatch
-                if (lightEntry == null && objectId != null && !string.IsNullOrEmpty(objectId.objectId))
+                string originalId = objectId.objectId;
+                lightEntry = TESLightManager.GetLight(originalId);
+                if (lightEntry != null)
                 {
-                    string originalId = objectId.objectId;
-                    lightEntry = TESLightManager.GetLight(originalId);
-                    if (lightEntry != null)
-                    {
-                        UnityEngine.Debug.LogWarning($"[PlaceStatics] Found light using original ID '{originalId}' (cleaned was '{modelId}')");
-                    }
+                    UnityEngine.Debug.LogWarning($"[PlaceStatics] Found light using original ID '{originalId}' (cleaned was '{modelId}')");
+                }
+            }
+            
+            if (lightEntry != null)
+            {
+                foundLightEntry = lightEntry; // Store for component attachment (even if we use STAT model)
+                
+                // Debug logging for streetlight lights
+                if (modelId.Contains("streetlight") || modelId.Contains("light_de_streetlight"))
+                {
+                    UnityEngine.Debug.LogWarning($"[PlaceStatics] Found light entry for '{modelId}': LightId='{lightEntry.LightId}', ModelFilename='{lightEntry.ModelFilename}', foundLightEntry set={foundLightEntry != null}, modelFilename already set={!string.IsNullOrEmpty(modelFilename)}");
                 }
                 
-                if (lightEntry != null && !string.IsNullOrEmpty(lightEntry.ModelFilename))
+                // Only use light's modelFilename if we don't already have one from STAT/CONT
+                if (string.IsNullOrEmpty(modelFilename) && !string.IsNullOrEmpty(lightEntry.ModelFilename))
                 {
-                    foundLightEntry = lightEntry; // Store for component attachment
                     // UnityEngine.Debug.LogWarning($"[PlaceStatics] Found light record '{modelId}', model: '{lightEntry.ModelFilename}'"); // Commented out for performance
                     // Clean the model filename from light (same pattern as containers)
                     modelFilename = lightEntry.ModelFilename.TrimEnd('\0', ' ', '\t', '\r', '\n');
@@ -1823,6 +1892,14 @@ namespace ESMSharp.TES3Terrain
                     
                     // Note: The NIFLoader will check TESNifLibrary cache first, then file system/BSA
                     // and cache the result in TESNifLibrary for reuse, just like containers and NPCs
+                }
+            }
+            else
+            {
+                // Debug logging for streetlight lights that weren't found
+                if (modelId.Contains("streetlight") || modelId.Contains("light_de_streetlight"))
+                {
+                    UnityEngine.Debug.LogWarning($"[PlaceStatics] Light lookup FAILED for '{modelId}'. Total lights in library: {TESLightManager.Count}");
                 }
             }
 
@@ -1893,14 +1970,39 @@ namespace ESMSharp.TES3Terrain
                     break;
             }
             
+            // Debug logging for streetlight lights
+            if (modelId.Contains("streetlight") || modelId.Contains("light_de_streetlight"))
+            {
+                UnityEngine.Debug.LogWarning($"[PlaceStatics] Filter check for '{modelId}': baseFilename='{baseFilename}', objectType={objectType}, shouldPlace={shouldPlace}, foundLightEntry={(foundLightEntry != null ? foundLightEntry.LightId : "null")}");
+            }
+            
             if (!shouldPlace)
             {
+                // Debug logging for streetlight lights
+                if (modelId.Contains("streetlight") || modelId.Contains("light_de_streetlight"))
+                {
+                    UnityEngine.Debug.LogWarning($"[PlaceStatics] Filter REJECTED '{modelId}' - not placing (baseFilename='{baseFilename}', objectType={objectType})");
+                }
                 yield break;
             }
 
             // Place the object based on type (using async coroutine versions)
+            // IMPORTANT: If this is a light, always place it as LargeStructures to ensure light component is attached
             bool success = false;
-            if (objectType == ObjectType.Trees)
+            if (foundLightEntry != null)
+            {
+                // This is a light - always place as LargeStructures regardless of objectType
+                Transform refParent = cellParent != null ? cellParent.transform : parent;
+                
+                // Debug logging for streetlight lights
+                if (modelId.Contains("streetlight") || modelId.Contains("light_de_streetlight"))
+                {
+                    UnityEngine.Debug.LogWarning($"[PlaceStatics] Light detected - placing as LargeStructures (was {objectType}) for '{modelId}': LightId='{foundLightEntry.LightId}'");
+                }
+                
+                yield return PlaceStaticObjectCoroutine(modelFilename, refp, scale, objectId, refParent, cellGridX, cellGridY, allRecords, foundLightEntry, (result) => success = result);
+            }
+            else if (objectType == ObjectType.Trees)
             {
                 Transform refParent = cellParent != null ? cellParent.transform : parent;
                 yield return PlaceTreeCoroutine(modelFilename, refp, scale, objectId, terrain, cellGridX, cellGridY, refParent, (result) => success = result);
@@ -1913,6 +2015,13 @@ namespace ESMSharp.TES3Terrain
             else if (objectType == ObjectType.LargeStructures)
             {
                 Transform refParent = cellParent != null ? cellParent.transform : parent;
+                
+                // Debug logging for streetlight lights
+                if (foundLightEntry != null && (modelId.Contains("streetlight") || modelId.Contains("light_de_streetlight")))
+                {
+                    UnityEngine.Debug.LogWarning($"[PlaceStatics] Passing foundLightEntry to PlaceStaticObjectCoroutine for '{modelId}': LightId='{foundLightEntry.LightId}'");
+                }
+                
                 yield return PlaceStaticObjectCoroutine(modelFilename, refp, scale, objectId, refParent, cellGridX, cellGridY, allRecords, foundLightEntry, (result) => success = result);
             }
             
@@ -2042,52 +2151,31 @@ namespace ESMSharp.TES3Terrain
                 }
             }
             
-            // If STAT and CONT record lookups failed, try to look up LIGH (light) record
-            if (string.IsNullOrEmpty(modelFilename))
+            // Always check for LIGH (light) record - even if STAT/CONT was found, the object ID might still be a light
+            // This ensures lights get the TESLight component attached even if they have a STAT record
+            TESLightManager.LightEntry foundLightEntry = null; // Store for later component attachment
+            // Use the cleaned modelId (which should match how it's stored in TESLightManager)
+            TESLightManager.LightEntry lightEntry = TESLightManager.GetLight(modelId);
+            
+            // If not found, try with the original objectId.objectId (before cleaning)
+            // GetLight will normalize it, so this should work if there was a cleaning mismatch
+            if (lightEntry == null && objectId != null && !string.IsNullOrEmpty(objectId.objectId))
             {
-                // Use the cleaned modelId (which should match how it's stored in TESLightManager)
-                // Log before lookup to verify we're searching for the right thing
-                if (modelFilename.Contains("light_de_streetlight") || modelFilename.Contains("streetlight"))
+                string originalId = objectId.objectId;
+                lightEntry = TESLightManager.GetLight(originalId);
+                if (lightEntry != null)
                 {
-                    UnityEngine.Debug.LogError($"[PlaceStatics] Attempting to lookup light with modelId: '{modelFilename}' (length: {modelFilename?.Length ?? 0})");
+                    UnityEngine.Debug.LogWarning($"[PlaceStatics] Found light using original ID '{originalId}' (cleaned was '{modelId}')");
                 }
-                TESLightManager.LightEntry lightEntry = TESLightManager.GetLight(modelId);
+            }
+            
+            if (lightEntry != null)
+            {
+                foundLightEntry = lightEntry; // Store for component attachment (even if we use STAT model)
                 
-                // If not found, try with the original objectId.objectId (before cleaning)
-                // GetLight will normalize it, so this should work if there was a cleaning mismatch
-                if (lightEntry == null && objectId != null && !string.IsNullOrEmpty(objectId.objectId))
+                // Only use light's modelFilename if we don't already have one from STAT/CONT
+                if (string.IsNullOrEmpty(modelFilename) && !string.IsNullOrEmpty(lightEntry.ModelFilename))
                 {
-                    string originalId = objectId.objectId;
-                    lightEntry = TESLightManager.GetLight(originalId);
-                    if (lightEntry != null)
-                    {
-                        UnityEngine.Debug.LogWarning($"[PlaceStatics] Found light using original ID '{originalId}' (cleaned was '{modelId}')");
-                    }
-                }
-                
-                #if UNITY_EDITOR
-                if (modelId.Contains("light_de_streetlight") || modelId.Contains("streetlight") || modelId.Contains("light_"))
-                {
-                    UnityEngine.Debug.LogWarning($"PlaceStatics: Looking up light '{modelId}'. Found: {lightEntry != null}. Total lights in library: {TESLightManager.Count}");
-                    if (lightEntry == null)
-                    {
-                        // Try to find any light with similar name
-                        var allLights = TESLightManager.GetAllLights();
-                        var matchingLights = allLights.Where(l => l.LightId != null && 
-                            (l.LightId.Contains("streetlight", StringComparison.OrdinalIgnoreCase) || 
-                             l.LightId.Contains(modelId, StringComparison.OrdinalIgnoreCase) ||
-                             modelId.Contains(l.LightId, StringComparison.OrdinalIgnoreCase))).Take(5);
-                        if (matchingLights.Any())
-                        {
-                            UnityEngine.Debug.LogWarning($"PlaceStatics: Found similar lights: {string.Join(", ", matchingLights.Select(l => l.LightId))}");
-                        }
-                    }
-                }
-                #endif
-                
-                if (lightEntry != null && !string.IsNullOrEmpty(lightEntry.ModelFilename))
-                {
-                    UnityEngine.Debug.LogWarning($"Model filename '{lightEntry.ModelFilename}' is found");
                     // Clean the model filename from light (same pattern as containers)
                     modelFilename = lightEntry.ModelFilename.TrimEnd('\0', ' ', '\t', '\r', '\n');
                     modelFilename = modelFilename.Replace("\0", "");
@@ -2203,7 +2291,7 @@ namespace ESMSharp.TES3Terrain
             else if (objectType == ObjectType.LargeStructures)
             {
                 Transform refParent = cellParent != null ? cellParent.transform : parent;
-                success = PlaceStaticObject(modelFilename, refp, scale, objectId, refParent, cellGridX, cellGridY, allRecords);
+                success = PlaceStaticObject(modelFilename, refp, scale, objectId, refParent, cellGridX, cellGridY, allRecords, foundLightEntry);
             }
             
             if (success)
@@ -2583,7 +2671,7 @@ namespace ESMSharp.TES3Terrain
         /// <summary>
         /// Places a single static object at the specified position
         /// </summary>
-        private bool PlaceStaticObject(string modelFilename, SubRecordCellREFP refp, float scale, SubRecordCellObjectID objectId, Transform parent, int cellGridX = 0, int cellGridY = 0, Record[] allRecords = null)
+        private bool PlaceStaticObject(string modelFilename, SubRecordCellREFP refp, float scale, SubRecordCellObjectID objectId, Transform parent, int cellGridX = 0, int cellGridY = 0, Record[] allRecords = null, TESLightManager.LightEntry lightEntry = null)
         {
             try
             {
@@ -2678,6 +2766,20 @@ namespace ESMSharp.TES3Terrain
                     // Add LOD component
                     AddLODToObject(instanceObj);
                     
+                    // Check if this is a light and attach TESLight component
+                    if (lightEntry != null)
+                    {
+                        AttachLightComponent(instanceObj, lightEntry);
+                    }
+                    else if (objectId != null && !string.IsNullOrEmpty(objectId.objectId))
+                    {
+                        // Fallback: try to find light by ID if not passed in
+                        string lightId = objectId.objectId.TrimEnd('\0', ' ', '\t', '\r', '\n');
+                        lightId = lightId.Replace("\0", "");
+                        lightId = new string(lightId.Where(c => c != '\0').ToArray()).Trim();
+                        AttachLightComponentIfNeeded(instanceObj, lightId);
+                    }
+                    
                     // Parent to terrain or specified parent
                     // Use worldPositionStays: true to preserve world position when parenting
                     // This prevents Unity from converting world position to local coordinates
@@ -2758,6 +2860,20 @@ namespace ESMSharp.TES3Terrain
                 // Add LOD component for distance-based culling
                 // Add to root and all children that have renderers
                 AddLODToObject(modelObj);
+                
+                // Check if this is a light and attach TESLight component
+                if (lightEntry != null)
+                {
+                    AttachLightComponent(modelObj, lightEntry);
+                }
+                else if (objectId != null && !string.IsNullOrEmpty(objectId.objectId))
+                {
+                    // Fallback: try to find light by ID if not passed in
+                    string lightId = objectId.objectId.TrimEnd('\0', ' ', '\t', '\r', '\n');
+                    lightId = lightId.Replace("\0", "");
+                    lightId = new string(lightId.Where(c => c != '\0').ToArray()).Trim();
+                    AttachLightComponentIfNeeded(modelObj, lightId);
+                }
                 
                 // Parent to terrain or specified parent
                 // Use worldPositionStays: true to preserve world position when parenting
