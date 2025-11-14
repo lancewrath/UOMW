@@ -181,19 +181,20 @@ namespace ESMSharp.TES3
             _lightsById[lightId] = entry;
             
             // Debug: Log when we add lights with streetlight in the name
-            #if UNITY_EDITOR
-            if (lightId.Contains("light_de_streetlight") || lightId.Contains("streetlight") || lightId.Contains("light_"))
-            {
-                Debug.Log($"TESLightManager: Added light '{lightId}' (length: {lightId.Length}, from {sourceESM ?? "unknown"}). Model: {entry.ModelFilename ?? "null"}");
-                // Show character codes for first and last few characters to detect hidden characters
-                if (lightId.Length > 0)
-                {
-                    string firstChars = string.Join(",", lightId.Take(5).Select(c => $"{(int)c}"));
-                    string lastChars = string.Join(",", lightId.TakeLast(5).Select(c => $"{(int)c}"));
-                    Debug.Log($"TESLightManager: Light ID character codes - First 5: [{firstChars}], Last 5: [{lastChars}]");
-                }
-            }
-            #endif
+            // Commented out for performance
+            // #if UNITY_EDITOR
+            // if (lightId.Contains("light_de_streetlight") || lightId.Contains("streetlight") || lightId.Contains("light_"))
+            // {
+            //     Debug.Log($"TESLightManager: Added light '{lightId}' (length: {lightId.Length}, from {sourceESM ?? "unknown"}). Model: {entry.ModelFilename ?? "null"}");
+            //     // Show character codes for first and last few characters to detect hidden characters
+            //     if (lightId.Length > 0)
+            //     {
+            //         string firstChars = string.Join(",", lightId.Take(5).Select(c => $"{(int)c}"));
+            //         string lastChars = string.Join(",", lightId.TakeLast(5).Select(c => $"{(int)c}"));
+            //         Debug.Log($"TESLightManager: Light ID character codes - First 5: [{firstChars}], Last 5: [{lastChars}]");
+            //     }
+            // }
+            // #endif
             
             return entry;
         }
@@ -217,11 +218,11 @@ namespace ESMSharp.TES3
             // Try exact match first (using cleaned ID)
             if (_lightsById.TryGetValue(cleanedId, out var entry))
             {
-                // Success - log for streetlight debugging
-                if (cleanedId.Contains("light_de_streetlight") || cleanedId.Contains("streetlight"))
-                {
-                    UnityEngine.Debug.Log($"[TESLightManager] SUCCESS: Found light '{cleanedId}' in dictionary!");
-                }
+                // Success - log for streetlight debugging (commented out for performance)
+                // if (cleanedId.Contains("light_de_streetlight") || cleanedId.Contains("streetlight"))
+                // {
+                //     UnityEngine.Debug.Log($"[TESLightManager] SUCCESS: Found light '{cleanedId}' in dictionary!");
+                // }
                 return entry;
             }
             

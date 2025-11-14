@@ -812,25 +812,8 @@ namespace ESMSharp.NIF
         /// </summary>
         private Material CreateURPMaterial(string materialName, Texture2D diffuseTexture = null, Texture2D normalTexture = null, Color? diffuseColor = null, bool isTree = false)
         {
-            // For trees, use URP/Nature/Speedtree9_URP shader (required for proper billboarding/lighting in URP)
+            // Tree shader check removed - not using SpeedTree9_URP anymore
             Shader shader = null;
-            if (isTree)
-            {
-                shader = Shader.Find("URP/Nature/Speedtree9_URP");
-                if (shader == null)
-                {
-                    // Fallback to alternative URP tree shader names
-                    shader = Shader.Find("Universal Render Pipeline/Nature/SpeedTree9");
-                }
-                if (shader == null)
-                {
-                    shader = Shader.Find("Nature/Soft Occlusion Leaves");
-                }
-                if (shader == null)
-                {
-                    UnityEngine.Debug.LogWarning("Could not find URP/Nature/Speedtree9_URP shader for tree. Falling back to URP Lit.");
-                }
-            }
             
             // If not a tree or tree shader not found, try URP shaders
             if (shader == null)

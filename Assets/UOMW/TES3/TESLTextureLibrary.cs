@@ -726,7 +726,7 @@ namespace ESMSharp.TES3
                 {
                     byte[] pngData = generatedNormalMap.EncodeToPNG();
                     System.IO.File.WriteAllBytes(normalMapPath, pngData);
-                    Debug.Log($"TESLTextureLibrary: Generated and saved normal map: {System.IO.Path.GetFileName(normalMapPath)}");
+                    // Debug.Log($"TESLTextureLibrary: Generated and saved normal map: {System.IO.Path.GetFileName(normalMapPath)}"); // Commented out for performance
                 }
                 catch (Exception ex)
                 {

@@ -141,7 +141,7 @@ namespace ESMSharp.TES3
             _type = name;
             _name = reader.ReadString(size);
             filename = SanitizeFileName(filename)+".mws";
-            Debug.Log("File: " + filename);
+            // Debug.Log("File: " + filename); // Commented out for performance
             
             // Create cache directory and save script to file
             Directory.CreateDirectory(System.IO.Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Scripts"));      

@@ -411,8 +411,8 @@ namespace ESMSharp.TES3Terrain
                                     TESCharacterManager.NPCEntry npcEntry = TESCharacterManager.GetNPC(objectIdClean);
                                     if (npcEntry != null)
                                     {
-                                        // This is an NPC but ANAM wasn't detected - log and place as NPC anyway
-                                        UnityEngine.Debug.LogWarning($"PlaceCellStatics: NPC '{objectIdClean}' detected by Object ID but ANAM was missing. Placing as NPC anyway.");
+                                        // This is an NPC but ANAM wasn't detected - place as NPC anyway
+                                        // UnityEngine.Debug.LogWarning($"PlaceCellStatics: NPC '{objectIdClean}' detected by Object ID but ANAM was missing. Placing as NPC anyway."); // Commented out for performance
                                         yield return PlaceNPCCoroutine(objectIdClean, currentREFP, currentScale, cellParent, cellGridX, cellGridY, counts);
                                         placedAsNPC = true;
                                     }
@@ -1804,7 +1804,7 @@ namespace ESMSharp.TES3Terrain
                 if (lightEntry != null && !string.IsNullOrEmpty(lightEntry.ModelFilename))
                 {
                     foundLightEntry = lightEntry; // Store for component attachment
-                    UnityEngine.Debug.LogWarning($"[PlaceStatics] Found light record '{modelId}', model: '{lightEntry.ModelFilename}'");
+                    // UnityEngine.Debug.LogWarning($"[PlaceStatics] Found light record '{modelId}', model: '{lightEntry.ModelFilename}'"); // Commented out for performance
                     // Clean the model filename from light (same pattern as containers)
                     modelFilename = lightEntry.ModelFilename.TrimEnd('\0', ' ', '\t', '\r', '\n');
                     modelFilename = modelFilename.Replace("\0", "");
@@ -2567,7 +2567,7 @@ namespace ESMSharp.TES3Terrain
                         string outputPath = Path.Combine(cacheDir, outputFilename);
                         File.WriteAllBytes(outputPath, modelData);
                         
-                        UnityEngine.Debug.Log($"Extracted NIF from BSA: {foundPath} -> {outputFilename}");
+                        // UnityEngine.Debug.Log($"Extracted NIF from BSA: {foundPath} -> {outputFilename}"); // Commented out for performance
                         return outputFilename;
                     }
                 }

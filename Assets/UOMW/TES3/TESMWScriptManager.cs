@@ -96,7 +96,7 @@ namespace ESMSharp.TES3
             }
             else
             {
-                Debug.Log($"TESMWScriptManager: Added script '{scriptName}' (from {sourceESM ?? "unknown"})");
+                // Debug.Log($"TESMWScriptManager: Added script '{scriptName}' (from {sourceESM ?? "unknown"})"); // Commented out for performance
             }
             
             return entry;

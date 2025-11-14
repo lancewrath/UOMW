@@ -60,9 +60,10 @@ namespace ESMSharp.TES3
         /// <returns>Number of ESM files loaded</returns>
         public static int ScanAndLoadESMs(string dataFolder = null)
         {
-            if (dataFolder == null)
+            if (string.IsNullOrEmpty(dataFolder))
             {
                 dataFolder = Path.Combine(Application.dataPath, "StreamingAssets", "Data");
+                Debug.Log("Path set to : " + dataFolder);
             }
             
             if (!Directory.Exists(dataFolder))

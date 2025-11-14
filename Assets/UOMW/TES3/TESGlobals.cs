@@ -63,6 +63,6 @@ namespace ESMSharp.TES3
         /// When enabled, NIF files are parsed on background threads and GameObjects are created on main thread
         /// Set to false for debugging model loading issues
         /// </summary>
-        public static bool EnableMultithreadedModelLoading { get; set; } = false;
+        public static bool EnableMultithreadedModelLoading { get; set; } = true;
     }
 }
