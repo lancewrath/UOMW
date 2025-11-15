@@ -86,17 +86,6 @@ namespace ESMSharp.TES3
                     {
                         lightId = NormalizeLightId(nameRec.name);
                         
-                        #if UNITY_EDITOR
-                        // Debug logging for lights with streetlight in name
-                        if (rawName != null && (rawName.Contains("light_de_streetlight") || rawName.Contains("streetlight")))
-                        {
-                            Debug.Log($"TESLightManager: Extracted NAME subrecord. Raw: '{rawName}' (length: {rawName?.Length ?? 0}), Cleaned: '{lightId}' (length: {lightId?.Length ?? 0})");
-                            if (rawName != null && rawName.Any(c => c == '\0'))
-                            {
-                                Debug.Log($"TESLightManager: Raw name contains null characters at positions: {string.Join(", ", Enumerable.Range(0, rawName.Length).Where(i => rawName[i] == '\0'))}");
-                            }
-                        }
-                        #endif
                     }
                     break;
                 }

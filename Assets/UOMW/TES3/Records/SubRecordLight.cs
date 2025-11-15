@@ -163,7 +163,6 @@ namespace ESMSharp.TES3
 
     }
 
-
     public class SubRecordLightSNAM : SubRecords
     {
         private string _name;

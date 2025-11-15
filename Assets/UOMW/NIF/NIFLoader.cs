@@ -208,7 +208,7 @@ namespace ESMSharp.NIF
         /// <summary>
         /// Loads a NIF file from cached models directory
         /// </summary>
-        public GameObject LoadNIFFromCache(string modelFilename, bool combineMeshes = false)
+        public GameObject LoadNIFFromCache(string modelFilename, bool combineMeshes = false, bool isTreeOrGrass = false)
         {
             // Normalize path separators - ensure forward slashes are used consistently
             // Path.Combine will use the correct separator for the OS, but we need to normalize the filename first
@@ -263,7 +263,7 @@ namespace ESMSharp.NIF
             try
             {
                 byte[] nifData = File.ReadAllBytes(cachePath);
-                return LoadNIFFromBytes(nifData, System.IO.Path.GetFileName(cachePath), combineMeshes);
+                return LoadNIFFromBytes(nifData, System.IO.Path.GetFileName(cachePath), combineMeshes, isTreeOrGrass);
             }
             catch (Exception ex)
             {
@@ -275,13 +275,13 @@ namespace ESMSharp.NIF
         /// <summary>
         /// Loads a NIF file from byte array
         /// </summary>
-        internal GameObject LoadNIFFromBytes(byte[] nifData, string filename, bool combineMeshes = false)
+        internal GameObject LoadNIFFromBytes(byte[] nifData, string filename, bool combineMeshes = false, bool isTreeOrGrass = false)
         {
             // Use niflib.net (primary loader)
             // No fallback - if niflib.net fails, we want to see the error and fix it
             try
             {
-                return LoadNIFFromBytesNiflib(nifData, filename, combineMeshes);
+                return LoadNIFFromBytesNiflib(nifData, filename, combineMeshes, isTreeOrGrass);
             }
             catch (System.Exception ex)
             {
@@ -936,7 +936,7 @@ namespace ESMSharp.NIF
         /// <summary>
         /// Loads a NIF file using niflib.net (more reliable parser)
         /// </summary>
-        private GameObject LoadNIFFromBytesNiflib(byte[] nifData, string filename, bool combineMeshes = false)
+        private GameObject LoadNIFFromBytesNiflib(byte[] nifData, string filename, bool combineMeshes = false, bool isTreeOrGrass = false)
         {
             using (MemoryStream stream = new MemoryStream(nifData))
             using (BinaryReader reader = new BinaryReader(stream))
@@ -1086,7 +1086,7 @@ namespace ESMSharp.NIF
                     meshFilter.mesh = unityMesh;
                     
                     MeshRenderer meshRenderer = meshObj.AddComponent<MeshRenderer>();
-                    Material mat = CreateMaterialFromNIF(nifMesh.Material, nifMesh.Textures, _esm, isTree: false);
+                    Material mat = CreateMaterialFromNIF(nifMesh.Material, nifMesh.Textures, _esm, isTree: isTreeOrGrass);
                     meshRenderer.material = mat;
                 }
                 

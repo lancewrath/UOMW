@@ -830,9 +830,8 @@ namespace ESMSharp.TES3Terrain
                     instanceObj.transform.position = instancePosition;
                     instanceObj.transform.rotation = instanceRotation;
                     
-                    // Trees are character-sized (128 Morrowind units), so use MORROWIND_TO_STATIC_SCALE * 128 * XSCL
-                    // MORROWIND_TO_STATIC_SCALE * 128 = 1.0 (same as NPCs)
-                    Vector3 instanceBaseScale = new Vector3(TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f, TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f, TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f);
+                    // XSCL scale multiplies the base GameObject scale (MORROWIND_TO_STATIC_SCALE = 0.0078125), same as regular statics
+                    Vector3 instanceBaseScale = new Vector3(TESGlobals.MORROWIND_TO_STATIC_SCALE, TESGlobals.MORROWIND_TO_STATIC_SCALE, TESGlobals.MORROWIND_TO_STATIC_SCALE);
                     // Apply XSCL scale (handle negative scales like statics)
                     if (scale < 0)
                     {
@@ -873,8 +872,8 @@ namespace ESMSharp.TES3Terrain
                     return true;
                 }
                 
-                // Load the NIF model with meshes combined (for trees)
-                GameObject treeModel = LoadNIFModel(baseFilename, combineMeshes: true);
+                // Load the NIF model (keep meshes separate like regular statics)
+                GameObject treeModel = LoadNIFModel(baseFilename, combineMeshes: false, isTreeOrGrass: true);
                 if (treeModel == null)
                 {
                     //UnityEngine.Debug.LogWarning($"Failed to load tree model: {baseFilename}");
@@ -884,7 +883,7 @@ namespace ESMSharp.TES3Terrain
                 // Store the loaded model in global library for future instancing
                 string staticId = objectId?.objectId?.TrimEnd('\0');
                 string staticName = staticId; // Use ID as name if no separate name available
-                TESNifLibrary.AddModel(staticId, staticName, baseFilename, baseFilenameNoExt, treeModel, combineMeshes: true);
+                TESNifLibrary.AddModel(staticId, staticName, baseFilename, baseFilenameNoExt, treeModel, combineMeshes: false);
                 
                 // Use the same coordinate conversion as PlaceStaticObject
                 
@@ -910,9 +909,8 @@ namespace ESMSharp.TES3Terrain
                 treeModel.transform.position = unityPosition;
                 treeModel.transform.rotation = unityRotation;
                 
-                // Trees are character-sized (128 Morrowind units), so use MORROWIND_TO_STATIC_SCALE * 128 * XSCL
-                // MORROWIND_TO_STATIC_SCALE * 128 = 1.0 (same as NPCs)
-                Vector3 treeBaseScale = new Vector3(TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f, TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f, TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f);
+                // XSCL scale multiplies the base GameObject scale (MORROWIND_TO_STATIC_SCALE = 0.0078125), same as regular statics
+                Vector3 treeBaseScale = new Vector3(TESGlobals.MORROWIND_TO_STATIC_SCALE, TESGlobals.MORROWIND_TO_STATIC_SCALE, TESGlobals.MORROWIND_TO_STATIC_SCALE);
                 // Apply XSCL scale (handle negative scales like statics)
                 if (scale < 0)
                 {
@@ -987,9 +985,8 @@ namespace ESMSharp.TES3Terrain
                     instanceObj.transform.position = instancePosition;
                     instanceObj.transform.rotation = instanceRotation;
                     
-                    // Trees are character-sized (128 Morrowind units), so use MORROWIND_TO_STATIC_SCALE * 128 * XSCL
-                    // MORROWIND_TO_STATIC_SCALE * 128 = 1.0 (same as NPCs)
-                    Vector3 instanceBaseScale = new Vector3(TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f, TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f, TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f);
+                    // XSCL scale multiplies the base GameObject scale (MORROWIND_TO_STATIC_SCALE = 0.0078125), same as regular statics
+                    Vector3 instanceBaseScale = new Vector3(TESGlobals.MORROWIND_TO_STATIC_SCALE, TESGlobals.MORROWIND_TO_STATIC_SCALE, TESGlobals.MORROWIND_TO_STATIC_SCALE);
                     instanceObj.transform.localScale = instanceBaseScale * (scale < 0 ? Mathf.Abs(scale) : scale);
                     
                     if (objectId != null && !string.IsNullOrEmpty(objectId.objectId))
@@ -1022,7 +1019,7 @@ namespace ESMSharp.TES3Terrain
             
             // Load model asynchronously
             GameObject treeModel = null;
-            yield return LoadNIFModelCoroutine(baseFilename, true, (loadedModel) => treeModel = loadedModel);
+            yield return LoadNIFModelCoroutine(baseFilename, false, (loadedModel) => treeModel = loadedModel, isTreeOrGrass: true);
             
             if (treeModel == null)
             {
@@ -1034,7 +1031,7 @@ namespace ESMSharp.TES3Terrain
             {
                 string staticId = objectId?.objectId?.TrimEnd('\0');
                 string staticName = staticId;
-                TESNifLibrary.AddModel(staticId, staticName, baseFilename, baseFilenameNoExt, treeModel, combineMeshes: true);
+                TESNifLibrary.AddModel(staticId, staticName, baseFilename, baseFilenameNoExt, treeModel, combineMeshes: false);
                 
                 float scaledX = refp.x * TESGlobals.MORROWIND_TO_STATIC_SCALE;
                 float scaledZ = refp.y * TESGlobals.MORROWIND_TO_STATIC_SCALE;
@@ -1046,9 +1043,8 @@ namespace ESMSharp.TES3Terrain
                 treeModel.transform.position = unityPosition;
                 treeModel.transform.rotation = unityRotation;
                 
-                // Trees are character-sized (128 Morrowind units), so use MORROWIND_TO_STATIC_SCALE * 128 * XSCL
-                // MORROWIND_TO_STATIC_SCALE * 128 = 1.0 (same as NPCs)
-                Vector3 instanceBaseScale = new Vector3(TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f, TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f, TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f);
+                // XSCL scale multiplies the base GameObject scale (MORROWIND_TO_STATIC_SCALE = 0.0078125), same as regular statics
+                Vector3 instanceBaseScale = new Vector3(TESGlobals.MORROWIND_TO_STATIC_SCALE, TESGlobals.MORROWIND_TO_STATIC_SCALE, TESGlobals.MORROWIND_TO_STATIC_SCALE);
                 treeModel.transform.localScale = instanceBaseScale * (scale < 0 ? Mathf.Abs(scale) : scale);
                 
                 if (objectId != null && !string.IsNullOrEmpty(objectId.objectId))
@@ -1104,9 +1100,8 @@ namespace ESMSharp.TES3Terrain
                     instanceObj.transform.position = instancePosition;
                     instanceObj.transform.rotation = instanceRotation;
                     
-                    // Grass is character-sized (128 Morrowind units), so use MORROWIND_TO_STATIC_SCALE * 128 * XSCL
-                    // MORROWIND_TO_STATIC_SCALE * 128 = 1.0 (same as NPCs and trees)
-                    Vector3 instanceBaseScale = new Vector3(TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f, TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f, TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f);
+                    // XSCL scale multiplies the base GameObject scale (MORROWIND_TO_STATIC_SCALE = 0.0078125), same as regular statics
+                    Vector3 instanceBaseScale = new Vector3(TESGlobals.MORROWIND_TO_STATIC_SCALE, TESGlobals.MORROWIND_TO_STATIC_SCALE, TESGlobals.MORROWIND_TO_STATIC_SCALE);
                     instanceObj.transform.localScale = instanceBaseScale * (scale < 0 ? Mathf.Abs(scale) : scale);
                     
                     if (objectId != null && !string.IsNullOrEmpty(objectId.objectId))
@@ -1156,7 +1151,7 @@ namespace ESMSharp.TES3Terrain
             }
             
             GameObject grassModel = null;
-            yield return LoadNIFModelCoroutine(baseFilename, true, (loadedModel) => grassModel = loadedModel);
+            yield return LoadNIFModelCoroutine(baseFilename, false, (loadedModel) => grassModel = loadedModel, isTreeOrGrass: true);
             
             if (grassModel == null)
             {
@@ -1168,7 +1163,7 @@ namespace ESMSharp.TES3Terrain
             {
                 string staticId = objectId?.objectId?.TrimEnd('\0');
                 string staticName = staticId;
-                TESNifLibrary.AddModel(staticId, staticName, baseFilename, baseFilenameNoExt, grassModel, combineMeshes: true);
+                TESNifLibrary.AddModel(staticId, staticName, baseFilename, baseFilenameNoExt, grassModel, combineMeshes: false);
                 
                 float scaledX = refp.x * TESGlobals.MORROWIND_TO_STATIC_SCALE;
                 float scaledZ = refp.y * TESGlobals.MORROWIND_TO_STATIC_SCALE;
@@ -1180,9 +1175,8 @@ namespace ESMSharp.TES3Terrain
                 grassModel.transform.position = unityPosition;
                 grassModel.transform.rotation = unityRotation;
                 
-                // Grass is character-sized (128 Morrowind units), so use MORROWIND_TO_STATIC_SCALE * 128 * XSCL
-                // MORROWIND_TO_STATIC_SCALE * 128 = 1.0 (same as NPCs and trees)
-                Vector3 grassBaseScale = new Vector3(TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f, TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f, TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f);
+                // XSCL scale multiplies the base GameObject scale (MORROWIND_TO_STATIC_SCALE = 0.0078125), same as regular statics
+                Vector3 grassBaseScale = new Vector3(TESGlobals.MORROWIND_TO_STATIC_SCALE, TESGlobals.MORROWIND_TO_STATIC_SCALE, TESGlobals.MORROWIND_TO_STATIC_SCALE);
                 grassModel.transform.localScale = grassBaseScale * (scale < 0 ? Mathf.Abs(scale) : scale);
                 
                 if (objectId != null && !string.IsNullOrEmpty(objectId.objectId))
@@ -1267,11 +1261,6 @@ namespace ESMSharp.TES3Terrain
                     // Check if this is a light and attach TESLight component
                     if (lightEntry != null)
                     {
-                        // Debug logging for streetlight lights
-                        if (lightEntry.LightId != null && (lightEntry.LightId.Contains("streetlight") || lightEntry.LightId.Contains("light_de_streetlight")))
-                        {
-                            UnityEngine.Debug.LogWarning($"[PlaceStatics] PlaceStaticObjectCoroutine (cached): Attaching light component for '{lightEntry.LightId}'");
-                        }
                         AttachLightComponent(instanceObj, lightEntry);
                     }
                     else if (objectId != null && !string.IsNullOrEmpty(objectId.objectId))
@@ -1280,26 +1269,7 @@ namespace ESMSharp.TES3Terrain
                         string lightId = objectId.objectId.TrimEnd('\0', ' ', '\t', '\r', '\n');
                         lightId = lightId.Replace("\0", "");
                         lightId = new string(lightId.Where(c => c != '\0').ToArray()).Trim();
-                        
-                        // Debug logging for streetlight lights
-                        if (lightId.Contains("streetlight") || lightId.Contains("light_de_streetlight"))
-                        {
-                            UnityEngine.Debug.LogWarning($"[PlaceStatics] PlaceStaticObjectCoroutine (cached): lightEntry was null, trying fallback lookup for '{lightId}'");
-                        }
-                        
                         AttachLightComponentIfNeeded(instanceObj, lightId);
-                    }
-                    else
-                    {
-                        // Debug logging for streetlight lights
-                        if (objectId != null && !string.IsNullOrEmpty(objectId.objectId))
-                        {
-                            string objId = objectId.objectId;
-                            if (objId.Contains("streetlight") || objId.Contains("light_de_streetlight"))
-                            {
-                                UnityEngine.Debug.LogWarning($"[PlaceStatics] PlaceStaticObjectCoroutine (cached): lightEntry was null and objectId was null/empty for potential light '{objId}'");
-                            }
-                        }
                     }
                     
                     if (parent != null)
@@ -1379,11 +1349,6 @@ namespace ESMSharp.TES3Terrain
                 // Check if this is a light and attach TESLight component
                 if (lightEntry != null)
                 {
-                    // Debug logging for streetlight lights
-                    if (lightEntry.LightId != null && (lightEntry.LightId.Contains("streetlight") || lightEntry.LightId.Contains("light_de_streetlight")))
-                    {
-                        UnityEngine.Debug.LogWarning($"[PlaceStatics] PlaceStaticObjectCoroutine (new): Attaching light component for '{lightEntry.LightId}'");
-                    }
                     AttachLightComponent(modelObj, lightEntry);
                 }
                 else if (objectId != null && !string.IsNullOrEmpty(objectId.objectId))
@@ -1392,26 +1357,7 @@ namespace ESMSharp.TES3Terrain
                     string lightId = objectId.objectId.TrimEnd('\0', ' ', '\t', '\r', '\n');
                     lightId = lightId.Replace("\0", "");
                     lightId = new string(lightId.Where(c => c != '\0').ToArray()).Trim();
-                    
-                    // Debug logging for streetlight lights
-                    if (lightId.Contains("streetlight") || lightId.Contains("light_de_streetlight"))
-                    {
-                        UnityEngine.Debug.LogWarning($"[PlaceStatics] PlaceStaticObjectCoroutine (new): lightEntry was null, trying fallback lookup for '{lightId}'");
-                    }
-                    
                     AttachLightComponentIfNeeded(modelObj, lightId);
-                }
-                else
-                {
-                    // Debug logging for streetlight lights
-                    if (objectId != null && !string.IsNullOrEmpty(objectId.objectId))
-                    {
-                        string objId = objectId.objectId;
-                        if (objId.Contains("streetlight") || objId.Contains("light_de_streetlight"))
-                        {
-                            UnityEngine.Debug.LogWarning($"[PlaceStatics] PlaceStaticObjectCoroutine (new): lightEntry was null and objectId was null/empty for potential light '{objId}'");
-                        }
-                    }
                 }
                 
                 if (parent != null)
@@ -1547,9 +1493,8 @@ namespace ESMSharp.TES3Terrain
                     instanceObj.transform.position = instancePosition;
                     instanceObj.transform.rotation = instanceRotation;
                     
-                    // Grass is character-sized (128 Morrowind units), so use MORROWIND_TO_STATIC_SCALE * 128 * XSCL
-                    // MORROWIND_TO_STATIC_SCALE * 128 = 1.0 (same as NPCs and trees)
-                    Vector3 instanceBaseScale = new Vector3(TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f, TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f, TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f);
+                    // XSCL scale multiplies the base GameObject scale (MORROWIND_TO_STATIC_SCALE = 0.0078125), same as regular statics
+                    Vector3 instanceBaseScale = new Vector3(TESGlobals.MORROWIND_TO_STATIC_SCALE, TESGlobals.MORROWIND_TO_STATIC_SCALE, TESGlobals.MORROWIND_TO_STATIC_SCALE);
                     // Apply XSCL scale (handle negative scales like statics)
                     if (scale < 0)
                     {
@@ -1611,8 +1556,8 @@ namespace ESMSharp.TES3Terrain
                     return true;
                 }
                 
-                // Load the NIF model with meshes combined (for grass, same as trees)
-                GameObject grassModel = LoadNIFModel(baseFilename, combineMeshes: true);
+                // Load the NIF model (keep meshes separate like regular statics)
+                GameObject grassModel = LoadNIFModel(baseFilename, combineMeshes: false, isTreeOrGrass: true);
                 if (grassModel == null)
                 {
                     //UnityEngine.Debug.LogWarning($"Failed to load grass model: {baseFilename}");
@@ -1622,7 +1567,7 @@ namespace ESMSharp.TES3Terrain
                 // Store the loaded model in global library for future instancing
                 string staticId = objectId?.objectId?.TrimEnd('\0');
                 string staticName = staticId; // Use ID as name if no separate name available
-                TESNifLibrary.AddModel(staticId, staticName, baseFilename, baseFilenameNoExt, grassModel, combineMeshes: true);
+                TESNifLibrary.AddModel(staticId, staticName, baseFilename, baseFilenameNoExt, grassModel, combineMeshes: false);
                 
                 // Use the same coordinate conversion as PlaceStaticObject and PlaceTree
                 
@@ -1648,9 +1593,8 @@ namespace ESMSharp.TES3Terrain
                 grassModel.transform.position = unityPosition;
                 grassModel.transform.rotation = unityRotation;
                 
-                // Grass is character-sized (128 Morrowind units), so use MORROWIND_TO_STATIC_SCALE * 128 * XSCL
-                // MORROWIND_TO_STATIC_SCALE * 128 = 1.0 (same as NPCs and trees)
-                Vector3 grassBaseScale = new Vector3(TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f, TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f, TESGlobals.MORROWIND_TO_STATIC_SCALE * 128f);
+                // XSCL scale multiplies the base GameObject scale (MORROWIND_TO_STATIC_SCALE = 0.0078125), same as regular statics
+                Vector3 grassBaseScale = new Vector3(TESGlobals.MORROWIND_TO_STATIC_SCALE, TESGlobals.MORROWIND_TO_STATIC_SCALE, TESGlobals.MORROWIND_TO_STATIC_SCALE);
                 // Apply XSCL scale (handle negative scales like statics)
                 if (scale < 0)
                 {
@@ -1864,12 +1808,6 @@ namespace ESMSharp.TES3Terrain
             {
                 foundLightEntry = lightEntry; // Store for component attachment (even if we use STAT model)
                 
-                // Debug logging for streetlight lights
-                if (modelId.Contains("streetlight") || modelId.Contains("light_de_streetlight"))
-                {
-                    UnityEngine.Debug.LogWarning($"[PlaceStatics] Found light entry for '{modelId}': LightId='{lightEntry.LightId}', ModelFilename='{lightEntry.ModelFilename}', foundLightEntry set={foundLightEntry != null}, modelFilename already set={!string.IsNullOrEmpty(modelFilename)}");
-                }
-                
                 // Only use light's modelFilename if we don't already have one from STAT/CONT
                 if (string.IsNullOrEmpty(modelFilename) && !string.IsNullOrEmpty(lightEntry.ModelFilename))
                 {
@@ -1892,14 +1830,6 @@ namespace ESMSharp.TES3Terrain
                     
                     // Note: The NIFLoader will check TESNifLibrary cache first, then file system/BSA
                     // and cache the result in TESNifLibrary for reuse, just like containers and NPCs
-                }
-            }
-            else
-            {
-                // Debug logging for streetlight lights that weren't found
-                if (modelId.Contains("streetlight") || modelId.Contains("light_de_streetlight"))
-                {
-                    UnityEngine.Debug.LogWarning($"[PlaceStatics] Light lookup FAILED for '{modelId}'. Total lights in library: {TESLightManager.Count}");
                 }
             }
 
@@ -1970,19 +1900,8 @@ namespace ESMSharp.TES3Terrain
                     break;
             }
             
-            // Debug logging for streetlight lights
-            if (modelId.Contains("streetlight") || modelId.Contains("light_de_streetlight"))
-            {
-                UnityEngine.Debug.LogWarning($"[PlaceStatics] Filter check for '{modelId}': baseFilename='{baseFilename}', objectType={objectType}, shouldPlace={shouldPlace}, foundLightEntry={(foundLightEntry != null ? foundLightEntry.LightId : "null")}");
-            }
-            
             if (!shouldPlace)
             {
-                // Debug logging for streetlight lights
-                if (modelId.Contains("streetlight") || modelId.Contains("light_de_streetlight"))
-                {
-                    UnityEngine.Debug.LogWarning($"[PlaceStatics] Filter REJECTED '{modelId}' - not placing (baseFilename='{baseFilename}', objectType={objectType})");
-                }
                 yield break;
             }
 
@@ -1993,13 +1912,6 @@ namespace ESMSharp.TES3Terrain
             {
                 // This is a light - always place as LargeStructures regardless of objectType
                 Transform refParent = cellParent != null ? cellParent.transform : parent;
-                
-                // Debug logging for streetlight lights
-                if (modelId.Contains("streetlight") || modelId.Contains("light_de_streetlight"))
-                {
-                    UnityEngine.Debug.LogWarning($"[PlaceStatics] Light detected - placing as LargeStructures (was {objectType}) for '{modelId}': LightId='{foundLightEntry.LightId}'");
-                }
-                
                 yield return PlaceStaticObjectCoroutine(modelFilename, refp, scale, objectId, refParent, cellGridX, cellGridY, allRecords, foundLightEntry, (result) => success = result);
             }
             else if (objectType == ObjectType.Trees)
@@ -2015,13 +1927,6 @@ namespace ESMSharp.TES3Terrain
             else if (objectType == ObjectType.LargeStructures)
             {
                 Transform refParent = cellParent != null ? cellParent.transform : parent;
-                
-                // Debug logging for streetlight lights
-                if (foundLightEntry != null && (modelId.Contains("streetlight") || modelId.Contains("light_de_streetlight")))
-                {
-                    UnityEngine.Debug.LogWarning($"[PlaceStatics] Passing foundLightEntry to PlaceStaticObjectCoroutine for '{modelId}': LightId='{foundLightEntry.LightId}'");
-                }
-                
                 yield return PlaceStaticObjectCoroutine(modelFilename, refp, scale, objectId, refParent, cellGridX, cellGridY, allRecords, foundLightEntry, (result) => success = result);
             }
             
@@ -2920,8 +2825,6 @@ namespace ESMSharp.TES3Terrain
                 tesLight = obj.AddComponent<TESLight>();
             }
             tesLight.Initialize(lightEntry);
-            
-            UnityEngine.Debug.Log($"[PlaceStatics] Attached TESLight component to '{obj.name}' with light '{lightEntry.LightId}'");
         }
         
         /// <summary>
@@ -3713,14 +3616,14 @@ namespace ESMSharp.TES3Terrain
         /// <summary>
         /// Coroutine version of LoadNIFModel that yields during file I/O
         /// </summary>
-        private IEnumerator LoadNIFModelCoroutine(string modelFilename, bool combineMeshes, System.Action<GameObject> onComplete)
+        private IEnumerator LoadNIFModelCoroutine(string modelFilename, bool combineMeshes, System.Action<GameObject> onComplete, bool isTreeOrGrass = false)
         {
             GameObject result = null;
             
             if (!TESGlobals.EnableMultithreadedModelLoading)
             {
                 // Synchronous loading (for debugging)
-                result = _nifLoader.LoadNIFFromCache(modelFilename, combineMeshes);
+                result = _nifLoader.LoadNIFFromCache(modelFilename, combineMeshes, isTreeOrGrass);
                 onComplete?.Invoke(result);
                 yield break;
             }
@@ -3788,7 +3691,7 @@ namespace ESMSharp.TES3Terrain
                     normalizedExtractedFilename = normalizedExtractedFilename.Replace('\\', '/');
                     
                     // Try loading the extracted file
-                    yield return LoadNIFModelCoroutine(normalizedExtractedFilename, combineMeshes, onComplete);
+                    yield return LoadNIFModelCoroutine(normalizedExtractedFilename, combineMeshes, onComplete, isTreeOrGrass);
                     yield break;
                 }
                 
@@ -3801,7 +3704,7 @@ namespace ESMSharp.TES3Terrain
             try
             {
                 string actualFilename = Path.GetFileName(modelFilename);
-                result = _nifLoader.LoadNIFFromBytes(nifData, actualFilename, combineMeshes);
+                result = _nifLoader.LoadNIFFromBytes(nifData, actualFilename, combineMeshes, isTreeOrGrass);
             }
             catch (System.Exception ex)
             {
@@ -3816,12 +3719,12 @@ namespace ESMSharp.TES3Terrain
         /// Loads a NIF model, using async loading if multithreading is enabled
         /// When async is enabled, file I/O happens on background thread
         /// </summary>
-        private GameObject LoadNIFModel(string modelFilename, bool combineMeshes = false)
+        private GameObject LoadNIFModel(string modelFilename, bool combineMeshes = false, bool isTreeOrGrass = false)
         {
             if (!TESGlobals.EnableMultithreadedModelLoading)
             {
                 // Synchronous loading (for debugging)
-                return _nifLoader.LoadNIFFromCache(modelFilename, combineMeshes);
+                return _nifLoader.LoadNIFFromCache(modelFilename, combineMeshes, isTreeOrGrass);
             }
 
             // Check cache first (thread-safe read)
@@ -3866,7 +3769,7 @@ namespace ESMSharp.TES3Terrain
                         normalizedExtractedFilename = normalizedExtractedFilename.Replace('\\', '/');
                         
                         // Try loading the extracted file (recursive call, but should be in cache now)
-                        return LoadNIFModel(normalizedExtractedFilename, combineMeshes);
+                        return LoadNIFModel(normalizedExtractedFilename, combineMeshes, isTreeOrGrass);
                     }
                     
                     UnityEngine.Debug.LogWarning($"LoadNIFModel: File not found: {modelFilename}");
@@ -3875,7 +3778,7 @@ namespace ESMSharp.TES3Terrain
 
                 // Parse and create GameObject on main thread (must be on main thread)
                 string actualFilename = Path.GetFileName(modelFilename);
-                return _nifLoader.LoadNIFFromBytes(nifData, actualFilename, combineMeshes);
+                return _nifLoader.LoadNIFFromBytes(nifData, actualFilename, combineMeshes, isTreeOrGrass);
             }
             catch (System.Exception ex)
             {

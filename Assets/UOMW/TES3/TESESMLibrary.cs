@@ -264,22 +264,13 @@ namespace ESMSharp.TES3
                                 
                                 // Register light with TESLightManager
                                 var lightEntry = TESLightManager.AddLight(lightrecord, esmFilename);
-                                #if UNITY_EDITOR
-                                if (lightEntry == null)
-                                {
-                                    // Try to extract the name for debugging
-                                    string debugName = "unknown";
-                                    foreach (var subrec in lightrecord.subRecords)
-                                    {
-                                        if (subrec is SubRecordLightNAME nameRec)
-                                        {
-                                            debugName = nameRec.name ?? "null";
-                                            break;
-                                        }
-                                    }
-                                    Debug.LogWarning($"TESESMLibrary: Failed to add LIGH record with NAME '{debugName}' from {esmFilename}");
-                                }
-                                #endif
+                                break;
+
+
+                            case "CLOT":
+                                RecordClothing clothrecord = new RecordClothing();
+                                clothrecord.Deserialize(reader, name);
+                                mRecord = clothrecord;
                                 break;
 
                             default:
