@@ -351,30 +351,8 @@ namespace ESMSharp.TES3Terrain
 
             //UnityEngine.Debug.Log($"Found {textureIndexToNames.Count} texture mappings");
 
-            // Step 2: Open BSA archive
-            string bsaPath = System.IO.Path.Combine(Application.dataPath, "StreamingAssets", "Data", _bsa);
-            if (!System.IO.File.Exists(bsaPath))
-            {
-                UnityEngine.Debug.LogError($"BSA file not found: {bsaPath}");
-                return;
-            }
-
-            BSASharp.BSA bsaArchive = null;
-            try
-            {
-                bsaArchive = new BSASharp.BSA();
-                bsaArchive.Open(bsaPath);
-                //UnityEngine.Debug.Log($"Opened BSA archive: {bsaPath}");
-            }
-            catch (System.Exception ex)
-            {
-                UnityEngine.Debug.LogError($"Failed to open BSA archive: {ex.Message}");
-                return;
-            }
-
-            // Step 3: Create output directory
-            string outputDir = System.IO.Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Textures", _esm);
-            System.IO.Directory.CreateDirectory(outputDir);
+            // Step 2: Use TESBSALibrary to search across all BSAs (no need to open a single BSA)
+            // We'll use TESBSALibrary.ExtractFile() which searches all BSAs automatically
 
             // Step 4: Collect unique texture indices from all Land records
             HashSet<int> uniqueTextureIndices = new HashSet<int>();
@@ -409,555 +387,114 @@ namespace ESMSharp.TES3Terrain
 
             //UnityEngine.Debug.Log($"Found {uniqueTextureIndices.Count} unique texture indices in land records");
 
-            // Step 5: Extract textures from BSA
-            int extractedCount = 0;
+            // Step 5: Load textures using TESLTextureLibrary (which handles BSA extraction, conversion, and caching)
+            int loadedCount = 0;
             int failedCount = 0;
 
-            // Get all file names from BSA for path resolution
-            HashSet<string> bsaFileNames = new HashSet<string>(bsaArchive.GetFileNames(), StringComparer.OrdinalIgnoreCase);
+            // Get all loaded ESMs to determine cache directories
+            string[] loadedESMs = TESESMLibrary.GetLoadedESMFilenames();
             
-            // Debug: Log some sample texture file names from BSA to understand path structure
-            int sampleCount = 0;
-            foreach (string bsaFileName in bsaFileNames)
+            // Determine the preferred ESM cache directory (use _esm if available, otherwise first loaded)
+            string preferredESMName = _esm;
+            if (string.IsNullOrEmpty(preferredESMName) && loadedESMs.Length > 0)
             {
-                string lowerName = bsaFileName.ToLower();
-                if ((lowerName.Contains(".tga") || lowerName.Contains(".dds")) && sampleCount < 10)
-                {
-                    //UnityEngine.Debug.Log($"Sample BSA texture path: '{bsaFileName}'");
-                    sampleCount++;
-                }
+                preferredESMName = System.IO.Path.GetFileNameWithoutExtension(loadedESMs[0]);
             }
 
             foreach (int textureIndex in uniqueTextureIndices)
             {
                 if (textureIndexToNames.TryGetValue(textureIndex, out var names))
                 {
+                    // VTEX index is textureIndex + 1 (VTEX 0 is default texture)
+                    ushort vtexIndex = (ushort)(textureIndex + 1);
+                    
                     // Try primary name first (from NAME subrecord), then fallback (from DATA subrecord)
-                    string[] namesToTry = new string[] { names.primary, names.fallback }
-                        .Where(n => !string.IsNullOrEmpty(n))
-                        .Distinct()
-                        .ToArray();
-                    
-                    // Check if texture is already cached
-                    bool alreadyCached = false;
-                    string cachedPngPath = null;
-                    string cachedOriginalPath = null;
-                    
-                    foreach (string textureName in namesToTry)
+                    // Sanitize names to remove null characters and trim whitespace
+                    string textureName = null;
+                    if (!string.IsNullOrEmpty(names.primary))
                     {
-                        string baseFilename = System.IO.Path.GetFileName(textureName);
-                        string baseNameNoExt = System.IO.Path.GetFileNameWithoutExtension(baseFilename);
-                        
-                        // Check if PNG already exists (preferred format)
-                        string pngPath = System.IO.Path.Combine(outputDir, baseNameNoExt + ".png");
-                        if (System.IO.File.Exists(pngPath))
-                        {
-                            alreadyCached = true;
-                            cachedPngPath = pngPath;
-                            extractedCount++;
-                            //UnityEngine.Debug.Log($"Texture already cached as PNG: {baseNameNoExt}.png (skipping extraction)");
-                            break;
-                        }
-                        
-                        // Check if original format exists (DDS, TGA, etc.)
-                        string[] extensions = new[] { ".dds", ".tga", ".png" };
-                        string originalExt = System.IO.Path.GetExtension(baseFilename);
-                        if (!string.IsNullOrEmpty(originalExt) && !extensions.Contains(originalExt.ToLower()))
-                        {
-                            extensions = new[] { originalExt.ToLower() }.Concat(extensions).ToArray();
-                        }
-                        
-                        foreach (string ext in extensions)
-                        {
-                            string testPath = System.IO.Path.Combine(outputDir, baseNameNoExt + ext);
-                            if (System.IO.File.Exists(testPath))
-                            {
-                                cachedOriginalPath = testPath;
-                                // Check if we need to convert to PNG
-                                if (ext == ".dds" || ext == ".tga")
-                                {
-                                    // Original exists but PNG doesn't - convert it
-                                    try
-                                    {
-                                        byte[] fileData = System.IO.File.ReadAllBytes(testPath);
-                                        if (ext == ".dds")
-                                        {
-                                            if (ConvertDDSToPNG(fileData, pngPath))
-                                            {
-                                                extractedCount++;
-                                                //UnityEngine.Debug.Log($"Converted cached DDS to PNG: {baseNameNoExt}.dds -> {baseNameNoExt}.png");
-                                                alreadyCached = true;
-                                                cachedPngPath = pngPath;
-                                                break;
-                                            }
-                                        }
-                                        else if (ext == ".tga")
-                                        {
-                                            Texture2D tempTexture = new Texture2D(2, 2);
-                                            if (tempTexture.LoadImage(fileData))
-                                            {
-                                                // Keep as RGBA32 (32-bit with alpha) - alpha will be set to "From grayscale" in import settings
-                                                Texture2D rgbaTexture = new Texture2D(tempTexture.width, tempTexture.height, TextureFormat.RGBA32, false);
-                                                Color32[] pixels = tempTexture.GetPixels32();
-                                                // Ensure all alpha values are 255 (opaque) - Unity will use grayscale for alpha via import settings
-                                                for (int i = 0; i < pixels.Length; i++)
-                                                {
-                                                    pixels[i].a = 255;
-                                                }
-                                                rgbaTexture.SetPixels32(pixels);
-                                                rgbaTexture.Apply();
-                                                
-                                                byte[] pngData = rgbaTexture.EncodeToPNG();
-                                                System.IO.File.WriteAllBytes(pngPath, pngData);
-                                                extractedCount++;
-                                                //UnityEngine.Debug.Log($"Converted cached TGA to PNG (32-bit): {baseNameNoExt}.tga -> {baseNameNoExt}.png");
-                                                UnityEngine.Object.DestroyImmediate(tempTexture);
-                                                UnityEngine.Object.DestroyImmediate(rgbaTexture);
-                                                #if UNITY_EDITOR
-                                                SetTextureImportSettings(pngPath);
-                                                #endif
-                                                alreadyCached = true;
-                                                cachedPngPath = pngPath;
-                                                break;
-                                            }
-                                            UnityEngine.Object.DestroyImmediate(tempTexture);
-                                        }
-                                    }
-                                    catch (System.Exception)
-                                    {
-                                        //UnityEngine.Debug.LogWarning($"Failed to convert cached {ext} to PNG");
-                                    }
-                                }
-                                else
-                                {
-                                    // Already PNG or other format, skip
-                                    alreadyCached = true;
-                                    extractedCount++;
-                                    //UnityEngine.Debug.Log($"Texture already cached: {baseNameNoExt}{ext} (skipping extraction)");
-                                    break;
-                                }
-                            }
-                        }
-                        if (alreadyCached) break;
+                        textureName = names.primary.TrimEnd('\0', ' ', '\t', '\r', '\n');
+                        textureName = textureName.Replace("\0", "");
+                        textureName = textureName.Trim();
+                    }
+                    if (string.IsNullOrEmpty(textureName) && !string.IsNullOrEmpty(names.fallback))
+                    {
+                        textureName = names.fallback.TrimEnd('\0', ' ', '\t', '\r', '\n');
+                        textureName = textureName.Replace("\0", "");
+                        textureName = textureName.Trim();
                     }
                     
-                    // Skip extraction if already cached
-                    if (alreadyCached)
-                        continue;
-                    
-                    try
+                    if (string.IsNullOrEmpty(textureName))
                     {
-                        string foundPath = null;
-                        string usedName = null;
-                        
-                        foreach (string textureName in namesToTry)
-                        {
-                            string baseFilename = System.IO.Path.GetFileName(textureName);
-                            
-                            // Debug: log what we're looking for
-                            //UnityEngine.Debug.Log($"Looking for texture: '{textureName}' (base: '{baseFilename}')");
-                            
-                            // Try multiple path variations
-                            string[] pathVariations = new string[]
-                            {
-                                textureName.Replace('/', '\\'),  // Original path with normalized separators
-                                baseFilename,  // Just the filename
-                                "textures\\" + baseFilename,  // textures\filename
-                                "textures\\landscape\\" + baseFilename,  // textures\landscape\filename
-                                "textures\\terrain\\" + baseFilename,  // textures\terrain\filename
-                                "textures\\tx\\" + baseFilename,  // textures\tx\filename
-                            };
-
-                            foreach (string pathVar in pathVariations)
-                            {
-                                // Check in our hashset first (faster)
-                                if (bsaFileNames.Contains(pathVar))
-                                {
-                                    foundPath = pathVar;
-                                    usedName = textureName;
-                                    break;
-                                }
-                                
-                                // Also check directly in BSA (in case hashset missed it)
-                                if (bsaArchive.FileExists(pathVar))
-                                {
-                                    foundPath = pathVar;
-                                    usedName = textureName;
-                                    break;
-                                }
-                            }
-                            
-                            if (foundPath != null) break;
-
-                            // If not found in common paths, try to find any file with matching name
-                            // Try case-insensitive search
-                            foreach (string bsaFileName in bsaFileNames)
-                            {
-                                string bsaBaseName = System.IO.Path.GetFileName(bsaFileName);
-                                if (bsaBaseName.Equals(baseFilename, StringComparison.OrdinalIgnoreCase))
-                                {
-                                    foundPath = bsaFileName;
-                                    usedName = textureName;
-                                    //UnityEngine.Debug.Log($"Found texture via search: '{baseFilename}' -> '{foundPath}'");
-                                    break;
-                                }
-                            }
-                            
-                            if (foundPath != null) break;
-                            
-                            // If still not found, try partial match (filename might have different extension or case)
-                            string baseNameNoExt = System.IO.Path.GetFileNameWithoutExtension(baseFilename);
-                            foreach (string bsaFileName in bsaFileNames)
-                            {
-                                string bsaBaseNameNoExt = System.IO.Path.GetFileNameWithoutExtension(bsaFileName);
-                                if (bsaBaseNameNoExt.Equals(baseNameNoExt, StringComparison.OrdinalIgnoreCase))
-                                {
-                                    foundPath = bsaFileName;
-                                    usedName = textureName;
-                                    //UnityEngine.Debug.Log($"Found texture via partial match: '{baseFilename}' -> '{foundPath}'");
-                                    break;
-                                }
-                            }
-                            
-                            if (foundPath != null) break;
-                        }
-
-                        if (foundPath != null)
-                        {
-                            // Extract file
-                            var fileEntry = bsaArchive.GetFileEntry(foundPath);
-                            if (fileEntry == null)
-                            {
-                                UnityEngine.Debug.LogWarning($"File entry not found for: {foundPath}");
                                 failedCount++;
                                 continue;
                             }
                             
-                            //UnityEngine.Debug.Log($"Extracting: {foundPath} (Size: {fileEntry.FileSize} bytes, Offset: {fileEntry.Offset})");
-                            byte[] fileData = bsaArchive.ExtractFile(foundPath);
-                            
-                            if (fileData == null || fileData.Length != fileEntry.FileSize)
-                            {
-                                UnityEngine.Debug.LogError($"Extracted data size mismatch for {foundPath}: expected {fileEntry.FileSize}, got {fileData?.Length ?? 0}");
-                                failedCount++;
-                                continue;
-                            }
-                            
-                            // Use the primary name for the output filename (or fallback if primary not available)
-                            string outputName = usedName ?? names.primary ?? names.fallback;
-                            string baseFilename = System.IO.Path.GetFileName(outputName);
-                            
-                            // Get the actual file extension from the BSA path (might be different from ESM filename)
-                            string bsaExtension = System.IO.Path.GetExtension(foundPath).ToLower();
-                            string esmExtension = System.IO.Path.GetExtension(baseFilename).ToLower();
-                            
-                            // Use the actual extension from BSA if available, otherwise use ESM extension
-                            string actualExtension = !string.IsNullOrEmpty(bsaExtension) ? bsaExtension : esmExtension;
-                            string outputFilename = System.IO.Path.ChangeExtension(baseFilename, actualExtension);
-                            string outputPath = System.IO.Path.Combine(outputDir, outputFilename);
-                            
-                            // Handle different texture formats
-                            if (actualExtension == ".dds")
-                            {
-                                // DDS files - Convert to PNG (works in both editor and play mode)
-                                try
-                                {
-                                    string pngFilename = System.IO.Path.ChangeExtension(baseFilename, ".png");
-                                    string pngOutputPath = System.IO.Path.Combine(outputDir, pngFilename);
-                                    
-                                    // Try to convert DDS to PNG
-                                    if (ConvertDDSToPNG(fileData, pngOutputPath))
-                                    {
-                                        extractedCount++;
-                                        //UnityEngine.Debug.Log($"Extracted and converted DDS->PNG: {foundPath} -> {pngOutputPath}");
-                                        #if UNITY_EDITOR
-                                        SetTextureImportSettings(pngOutputPath);
-                                        #endif
-                                    }
-                                    else
-                                    {
-                                        // If conversion failed, try editor API as fallback
-                                        #if UNITY_EDITOR
-                                        System.IO.File.WriteAllBytes(outputPath, fileData);
-                                        string assetPath = "Assets" + outputPath.Replace(Application.dataPath, "").Replace('\\', '/');
-                                        UnityEditor.AssetDatabase.ImportAsset(assetPath, UnityEditor.ImportAssetOptions.ForceUpdate);
-                                        
-                                        Texture2D tempTexture = UnityEditor.AssetDatabase.LoadAssetAtPath<Texture2D>(assetPath);
-                                        if (tempTexture != null)
-                                        {
-                                            // Keep as RGBA32 (32-bit with alpha) - alpha will be set to "From grayscale" in import settings
-                                            Texture2D rgbaTexture = new Texture2D(tempTexture.width, tempTexture.height, TextureFormat.RGBA32, false);
-                                            Color32[] pixels = tempTexture.GetPixels32();
-                                            // Ensure all alpha values are 255 (opaque) - Unity will use grayscale for alpha via import settings
-                                            for (int i = 0; i < pixels.Length; i++)
-                                            {
-                                                pixels[i].a = 255;
-                                            }
-                                            rgbaTexture.SetPixels32(pixels);
-                                            rgbaTexture.Apply();
-                                            
-                                            byte[] pngData = rgbaTexture.EncodeToPNG();
-                                            System.IO.File.WriteAllBytes(pngOutputPath, pngData);
-                                            System.IO.File.Delete(outputPath);
-                                            UnityEditor.AssetDatabase.DeleteAsset(assetPath);
-                                            extractedCount++;
-                                            //UnityEngine.Debug.Log($"Extracted and converted DDS->PNG (32-bit via AssetDatabase): {foundPath} -> {pngOutputPath} ({tempTexture.width}x{tempTexture.height})");
-                                            
-                                            UnityEngine.Object.DestroyImmediate(rgbaTexture);
-                                        }
-                                        else
-                                        {
-                                            // Keep DDS if all conversion methods fail
-                                            extractedCount++;
-                                            UnityEngine.Debug.LogWarning($"Could not convert DDS, keeping as DDS: {outputPath}");
-                                        }
-                                        #else
-                                        // At runtime, if conversion failed, save as DDS
-                                        System.IO.File.WriteAllBytes(outputPath, fileData);
-                                        extractedCount++;
-                                        UnityEngine.Debug.LogWarning($"Could not convert DDS at runtime, saved as DDS: {outputPath}");
-                                        #endif
-                                    }
-                                }
-                                catch (System.Exception ex)
-                                {
-                                    UnityEngine.Debug.LogError($"Error processing DDS file {baseFilename}: {ex.Message}");
-                                    System.IO.File.WriteAllBytes(outputPath, fileData);
-                                    extractedCount++;
-                                }
-                            }
-                            else if (actualExtension == ".tga")
-                            {
-                                // TGA files - try to convert to PNG
-                                try
-                                {
-                                    Texture2D tempTexture = new Texture2D(2, 2);
-                                    if (tempTexture.LoadImage(fileData))
-                                    {
-                                        // Keep as RGBA32 (32-bit with alpha) - alpha will be set to "From grayscale" in import settings
-                                        Texture2D rgbaTexture = new Texture2D(tempTexture.width, tempTexture.height, TextureFormat.RGBA32, false);
-                                        Color32[] pixels = tempTexture.GetPixels32();
-                                        // Ensure all alpha values are 255 (opaque) - Unity will use grayscale for alpha via import settings
-                                        for (int i = 0; i < pixels.Length; i++)
-                                        {
-                                            pixels[i].a = 255;
-                                        }
-                                        rgbaTexture.SetPixels32(pixels);
-                                        rgbaTexture.Apply();
-                                        
-                                        // Convert to PNG
-                                        byte[] pngData = rgbaTexture.EncodeToPNG();
-                                        string pngFilename = System.IO.Path.ChangeExtension(baseFilename, ".png");
-                                        outputPath = System.IO.Path.Combine(outputDir, pngFilename);
-                                        
-                                        System.IO.File.WriteAllBytes(outputPath, pngData);
-                                        extractedCount++;
-                                        
-                                        UnityEngine.Object.DestroyImmediate(tempTexture);
-                                        UnityEngine.Object.DestroyImmediate(rgbaTexture);
-                                        //UnityEngine.Debug.Log($"Extracted and converted TGA->PNG: {foundPath} -> {outputPath} ({tempTexture.width}x{tempTexture.height})");
-                                        #if UNITY_EDITOR
-                                        SetTextureImportSettings(outputPath);
-                                        #endif
-                                    }
-                                    else
-                                    {
-                                        // If LoadImage fails, save as-is
-                                        UnityEngine.Debug.LogWarning($"Failed to load TGA image, saving as-is: {baseFilename}");
-                                        System.IO.File.WriteAllBytes(outputPath, fileData);
-                                        extractedCount++;
-                                        UnityEngine.Object.DestroyImmediate(tempTexture);
-                                    }
-                                }
-                                catch (System.Exception ex)
-                                {
-                                    UnityEngine.Debug.LogError($"Error converting TGA to PNG for {baseFilename}: {ex.Message}");
-                                    System.IO.File.WriteAllBytes(outputPath, fileData);
-                                    extractedCount++;
-                                }
-                            }
-                            else
-                            {
-                                // Other formats (PNG, JPG, etc.) - save as-is
-                                System.IO.File.WriteAllBytes(outputPath, fileData);
-                                extractedCount++;
-                                //UnityEngine.Debug.Log($"Extracted: {foundPath} -> {outputPath}");
-                            }
-                        }
-                        else
+                    // Try to load texture using TESLTextureLibrary (handles BSA extraction, conversion, caching)
+                    // Try each ESM cache directory until we find or successfully extract the texture
+                    TESLTextureLibrary.TextureEntry textureEntry = null;
+                    string targetESMName = preferredESMName;
+                    
+                    // First, try the preferred ESM
+                    string textureDir = System.IO.Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Textures", targetESMName);
+                    System.IO.Directory.CreateDirectory(textureDir);
+                    
+                    textureEntry = TESLTextureLibrary.LoadOrGetTexture(
+                        textureName,
+                        textureDir,
+                        targetESMName,
+                        textureIndex,
+                        vtexIndex,
+                        ConvertDDSToPNG,
+                        SetTextureImportSettings
+                    );
+                    
+                    // If not found in preferred ESM, try other ESMs
+                    if (textureEntry == null)
+                    {
+                        foreach (string esmFilename in loadedESMs)
                         {
-                            // Texture not found in BSA, try file system
-                            string fileSystemPath = null;
-                            string bsaDirectory = System.IO.Path.GetDirectoryName(bsaPath);
+                            string esmName = System.IO.Path.GetFileNameWithoutExtension(esmFilename);
+                            if (esmName.Equals(targetESMName, StringComparison.OrdinalIgnoreCase))
+                                continue; // Already tried
                             
-                            // Try common texture directory locations relative to BSA file
-                            string[] textureDirs = new[]
-                            {
-                                System.IO.Path.Combine(bsaDirectory, "Textures"),
-                                System.IO.Path.Combine(bsaDirectory, "textures"),
-                                System.IO.Path.Combine(System.IO.Path.GetDirectoryName(bsaDirectory), "Textures"),
-                                System.IO.Path.Combine(System.IO.Path.GetDirectoryName(bsaDirectory), "textures"),
-                            };
+                            textureDir = System.IO.Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Textures", esmName);
+                            System.IO.Directory.CreateDirectory(textureDir);
                             
-                            foreach (string textureName in namesToTry)
-                            {
-                                string baseFilename = System.IO.Path.GetFileName(textureName);
-                                string baseNameNoExt = System.IO.Path.GetFileNameWithoutExtension(baseFilename);
-                                
-                                // Try multiple extensions
-                                string[] extensions = new[] { ".dds", ".tga", ".png" };
-                                string originalExt = System.IO.Path.GetExtension(textureName);
-                                if (!string.IsNullOrEmpty(originalExt) && !extensions.Contains(originalExt.ToLower()))
-                                {
-                                    extensions = new[] { originalExt.ToLower() }.Concat(extensions).ToArray();
-                                }
-                                
-                                foreach (string textureDir in textureDirs)
-                                {
-                                    if (System.IO.Directory.Exists(textureDir))
-                                    {
-                                        foreach (string ext in extensions)
-                                        {
-                                            string testPath = System.IO.Path.Combine(textureDir, baseNameNoExt + ext);
-                                            if (System.IO.File.Exists(testPath))
-                                            {
-                                                fileSystemPath = testPath;
-                                                usedName = textureName;
+                            textureEntry = TESLTextureLibrary.LoadOrGetTexture(
+                                textureName,
+                                textureDir,
+                                esmName,
+                                textureIndex,
+                                vtexIndex,
+                                ConvertDDSToPNG,
+                                SetTextureImportSettings
+                            );
+                            
+                            if (textureEntry != null)
                                                 break;
                                             }
-                                            
-                                            // Also try with full path from textureName
-                                            string fullPath = System.IO.Path.Combine(textureDir, textureName.Replace('/', '\\'));
-                                            if (System.IO.File.Exists(fullPath))
-                                            {
-                                                fileSystemPath = fullPath;
-                                                usedName = textureName;
-                                                break;
-                                            }
-                                        }
-                                        if (fileSystemPath != null) break;
-                                    }
-                                }
-                                if (fileSystemPath != null) break;
-                            }
-                            
-                            if (fileSystemPath != null && System.IO.File.Exists(fileSystemPath))
-                            {
-                                // Copy file from file system to cache
-                                try
-                                {
-                                    string outputName = usedName ?? names.primary ?? names.fallback;
-                                    string baseFilename = System.IO.Path.GetFileName(outputName);
-                                    string actualExtension = System.IO.Path.GetExtension(fileSystemPath).ToLower();
-                                    string outputFilename = System.IO.Path.ChangeExtension(baseFilename, actualExtension);
-                                    string outputPath = System.IO.Path.Combine(outputDir, outputFilename);
-                                    
-                                    // Handle DDS conversion if needed
-                                    if (actualExtension == ".dds")
-                                    {
-                                        byte[] fileData = System.IO.File.ReadAllBytes(fileSystemPath);
-                                        string pngFilename = System.IO.Path.ChangeExtension(baseFilename, ".png");
-                                        string pngOutputPath = System.IO.Path.Combine(outputDir, pngFilename);
-                                        
-                                        if (ConvertDDSToPNG(fileData, pngOutputPath))
-                                        {
-                                            extractedCount++;
-                                            //UnityEngine.Debug.Log($"Copied and converted DDS->PNG from file system: {fileSystemPath} -> {pngOutputPath}");
-                                            #if UNITY_EDITOR
-                                            SetTextureImportSettings(pngOutputPath);
-                                            #endif
+                    }
+                    
+                    if (textureEntry != null && textureEntry.Texture != null)
+                    {
+                        loadedCount++;
                                         }
                                         else
                                         {
-                                            // Copy DDS as-is if conversion fails
-                                            System.IO.File.Copy(fileSystemPath, outputPath, true);
-                                            extractedCount++;
-                                            //UnityEngine.Debug.Log($"Copied DDS from file system: {fileSystemPath} -> {outputPath}");
-                                        }
-                                    }
-                                    else if (actualExtension == ".tga")
-                                    {
-                                        // Try to convert TGA to PNG (24-bit RGB, no alpha)
-                                        byte[] fileData = System.IO.File.ReadAllBytes(fileSystemPath);
-                                        Texture2D tempTexture = new Texture2D(2, 2);
-                                        if (tempTexture.LoadImage(fileData))
-                                        {
-                                            // Keep as RGBA32 (32-bit with alpha) - alpha will be set to "From grayscale" in import settings
-                                            Texture2D rgbaTexture = new Texture2D(tempTexture.width, tempTexture.height, TextureFormat.RGBA32, false);
-                                            Color32[] pixels = tempTexture.GetPixels32();
-                                            // Ensure all alpha values are 255 (opaque) - Unity will use grayscale for alpha via import settings
-                                            for (int i = 0; i < pixels.Length; i++)
-                                            {
-                                                pixels[i].a = 255;
-                                            }
-                                            rgbaTexture.SetPixels32(pixels);
-                                            rgbaTexture.Apply();
-                                            
-                                            byte[] pngData = rgbaTexture.EncodeToPNG();
-                                            string pngFilename = System.IO.Path.ChangeExtension(baseFilename, ".png");
-                                            string pngOutputPath = System.IO.Path.Combine(outputDir, pngFilename);
-                                            System.IO.File.WriteAllBytes(pngOutputPath, pngData);
-                                            extractedCount++;
-                                            //UnityEngine.Debug.Log($"Copied and converted TGA->PNG (32-bit) from file system: {fileSystemPath} -> {pngOutputPath}");
-                                            
-                                            UnityEngine.Object.DestroyImmediate(tempTexture);
-                                            UnityEngine.Object.DestroyImmediate(rgbaTexture);
-                                            #if UNITY_EDITOR
-                                            SetTextureImportSettings(pngOutputPath);
-                                            #endif
-                                        }
-                                        else
-                                        {
-                                            System.IO.File.Copy(fileSystemPath, outputPath, true);
-                                            extractedCount++;
-                                            //UnityEngine.Debug.Log($"Copied TGA from file system: {fileSystemPath} -> {outputPath}");
-                                            UnityEngine.Object.DestroyImmediate(tempTexture);
-                                        }
-                                    }
-                                    else
-                                    {
-                                        // Copy other formats as-is
-                                        System.IO.File.Copy(fileSystemPath, outputPath, true);
-                                        extractedCount++;
-                                        //UnityEngine.Debug.Log($"Copied from file system: {fileSystemPath} -> {outputPath}");
-                                    }
-                                }
-                                catch (System.Exception ex)
-                                {
-                                    UnityEngine.Debug.LogError($"Failed to copy texture from file system {fileSystemPath}: {ex.Message}");
                                     failedCount++;
+                        //UnityEngine.Debug.LogWarning($"Failed to load texture '{textureName}' (LTEX index {textureIndex}, VTEX index {vtexIndex})");
                                 }
                             }
                             else
                             {
-                                // Build list of names we tried for error message
-                                string triedNames = string.Join(", ", namesToTry.Select(n => $"'{n}'"));
-                                //UnityEngine.Debug.LogWarning($"Texture not found in BSA or file system for index {textureIndex} (tried names: {triedNames})");
-                                failedCount++;
-                            }
-                        }
-                    }
-                    catch (System.Exception ex)
-                    {
-                        string triedNames = string.Join(", ", namesToTry.Select(n => $"'{n}'"));
-                        UnityEngine.Debug.LogError($"Failed to extract texture for index {textureIndex} (tried: {triedNames}): {ex.Message}");
-                        failedCount++;
-                    }
-                }
-                else
-                {
-                    //UnityEngine.Debug.LogWarning($"No filename mapping found for texture index {textureIndex}");
+                    // No filename mapping found for this texture index
                     failedCount++;
                 }
             }
 
-            // Clean up
-            if (bsaArchive != null)
-            {
-                bsaArchive.Close();
-            }
-
-            //UnityEngine.Debug.Log($"Texture extraction complete: {extractedCount} extracted, {failedCount} failed");
+            // Clean up is handled by TESLTextureLibrary internally
+            //UnityEngine.Debug.Log($"Texture loading complete: {loadedCount} loaded, {failedCount} failed");
         }
 
         /// <summary>
@@ -1821,23 +1358,36 @@ namespace ESMSharp.TES3Terrain
                         UnityEngine.Debug.Log($"Reusing cached texture from library (by VTEX {vtexIndex}): {cachedEntry.Filename}");
                     }
                     
-                    string textureDir = System.IO.Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Textures", _esm);
-                    
                     // Try both NAME and DATA values, and also try with common Morrowind texture prefixes
                     List<string> namesToTry = new List<string>();
+                    
+                    // Helper function to sanitize texture names
+                    Func<string, string> sanitizeName = (name) =>
+                    {
+                        if (string.IsNullOrEmpty(name))
+                            return null;
+                        string sanitized = name.TrimEnd('\0', ' ', '\t', '\r', '\n');
+                        sanitized = sanitized.Replace("\0", "");
+                        sanitized = sanitized.Trim();
+                        return string.IsNullOrEmpty(sanitized) ? null : sanitized;
+                    };
+                    
                     if (!string.IsNullOrEmpty(names.primary))
                     {
-                        namesToTry.Add(names.primary);
-                        // Try with common prefixes (only if not already present)
-                        if (!names.primary.StartsWith("Tx_", StringComparison.OrdinalIgnoreCase) && 
-                            !names.primary.StartsWith("tx_", StringComparison.OrdinalIgnoreCase))
+                        string sanitizedPrimary = sanitizeName(names.primary);
+                        if (!string.IsNullOrEmpty(sanitizedPrimary))
                         {
-                        namesToTry.Add("Tx_" + names.primary);
-                        namesToTry.Add("tx_" + names.primary.ToLower());
+                            namesToTry.Add(sanitizedPrimary);
+                        // Try with common prefixes (only if not already present)
+                            if (!sanitizedPrimary.StartsWith("Tx_", StringComparison.OrdinalIgnoreCase) && 
+                                !sanitizedPrimary.StartsWith("tx_", StringComparison.OrdinalIgnoreCase))
+                        {
+                                namesToTry.Add("Tx_" + sanitizedPrimary);
+                                namesToTry.Add("tx_" + sanitizedPrimary.ToLower());
                         }
                         // Try removing spaces (common in Morrowind texture names)
-                        string primaryNoSpaces = names.primary.Replace(" ", "");
-                        if (primaryNoSpaces != names.primary)
+                            string primaryNoSpaces = sanitizedPrimary.Replace(" ", "");
+                            if (primaryNoSpaces != sanitizedPrimary)
                         {
                             namesToTry.Add(primaryNoSpaces);
                             if (!primaryNoSpaces.StartsWith("Tx_", StringComparison.OrdinalIgnoreCase) && 
@@ -1845,13 +1395,21 @@ namespace ESMSharp.TES3Terrain
                             {
                                 namesToTry.Add("Tx_" + primaryNoSpaces);
                                 namesToTry.Add("tx_" + primaryNoSpaces.ToLower());
+                                }
                             }
                         }
                     }
                     if (!string.IsNullOrEmpty(names.fallback))
                     {
-                        namesToTry.Add(names.fallback);
-                        string fallbackBase = System.IO.Path.GetFileNameWithoutExtension(names.fallback);
+                        string sanitizedFallback = sanitizeName(names.fallback);
+                        if (!string.IsNullOrEmpty(sanitizedFallback))
+                        {
+                            namesToTry.Add(sanitizedFallback);
+                            string fallbackBase = System.IO.Path.GetFileNameWithoutExtension(sanitizedFallback);
+                            // Sanitize the base name too
+                            fallbackBase = sanitizeName(fallbackBase);
+                            if (!string.IsNullOrEmpty(fallbackBase))
+                            {
                         namesToTry.Add(fallbackBase);
                         // Also try with Tx_ prefix if not already there
                         if (!fallbackBase.StartsWith("Tx_", StringComparison.OrdinalIgnoreCase) && 
@@ -1859,79 +1417,48 @@ namespace ESMSharp.TES3Terrain
                         {
                             namesToTry.Add("Tx_" + fallbackBase);
                             namesToTry.Add("tx_" + fallbackBase.ToLower());
+                                }
+                            }
                         }
                     }
                     // Remove duplicates
                     namesToTry = namesToTry.Distinct().ToList();
                     
-                    // Try to find the texture file (case-insensitive) - MATCHING ORIGINAL WORKING CODE
+                    // Try to find the texture file (case-insensitive) - Check all ESM cache directories
                     // Only search if not already found in library
-                    if (texture == null && Directory.Exists(textureDir))
+                    if (texture == null)
                     {
-                        string[] files = Directory.GetFiles(textureDir);
-                        UnityEngine.Debug.Log($"[VTEX {vtexIndex}] Searching in directory with {files.Length} files");
+                        // Get all loaded ESMs to check their cache directories
+                        string[] loadedESMs = TESESMLibrary.GetLoadedESMFilenames();
                         
-                        // For each name to try, search with multiple extensions
-                        foreach (string nameToTry in namesToTry)
+                        // Try preferred ESM first if specified
+                        string preferredESMName = System.IO.Path.GetFileNameWithoutExtension(_esm);
+                        if (!string.IsNullOrEmpty(preferredESMName))
                         {
-                            string baseNameNoExt = System.IO.Path.GetFileNameWithoutExtension(nameToTry);
-                            
-                            // Try multiple extensions: PNG (converted from DDS/TGA), DDS (if not converted), TGA, and original
-                            string[] extensions = new[] { ".png", ".dds", ".tga" };
-                            string originalExt = System.IO.Path.GetExtension(nameToTry);
-                            if (!string.IsNullOrEmpty(originalExt) && !extensions.Contains(originalExt.ToLower()))
+                            string preferredTextureDir = System.IO.Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Textures", preferredESMName);
+                            texturePath = FindTextureInCacheDirectories(preferredTextureDir, namesToTry, vtexIndex);
+                            if (texturePath != null)
                             {
-                                extensions = new[] { originalExt.ToLower() }.Concat(extensions).ToArray();
+                                foundBaseName = System.IO.Path.GetFileName(texturePath);
                             }
-                            
-                            foreach (string ext in extensions)
-                            {
-                                string searchFilename = baseNameNoExt + ext;
-                                //UnityEngine.Debug.Log($"[VTEX {vtexIndex}] Searching for: {searchFilename}");
-                                
-                                foreach (string file in files)
-                                {
-                                    string fileName = System.IO.Path.GetFileName(file);
-                                    // Case-insensitive comparison
-                                    if (fileName.Equals(searchFilename, StringComparison.OrdinalIgnoreCase))
-                                    {
-                                        texturePath = file;
-                                        foundBaseName = fileName;
-                                        //UnityEngine.Debug.Log($"[VTEX {vtexIndex}] ✓ Found: {fileName}");
-                                        break;
-                                    }
-                                }
-                                if (texturePath != null) break;
-                            }
-                            if (texturePath != null) break;
                         }
                         
-                        // If still not found, try a more aggressive search - check if any file contains the base name
-                        if (texturePath == null && namesToTry.Count > 0)
+                        // Check all ESM cache directories if not found in preferred
+                        if (texturePath == null)
                         {
-                            string firstBaseName = System.IO.Path.GetFileNameWithoutExtension(namesToTry[0]);
-                            UnityEngine.Debug.Log($"[VTEX {vtexIndex}] Exact match failed, trying fuzzy search for: {firstBaseName}");
-                            
-                            foreach (string file in files)
+                            foreach (string esmFilename in loadedESMs)
                             {
-                                string fileName = System.IO.Path.GetFileName(file);
-                                string fileNameNoExt = System.IO.Path.GetFileNameWithoutExtension(fileName);
-                                
-                                // Try removing underscores and spaces for comparison
-                                string normalizedSearch = firstBaseName.Replace("_", "").Replace(" ", "").Replace("-", "").ToLower();
-                                string normalizedFile = fileNameNoExt.Replace("_", "").Replace(" ", "").Replace("-", "").ToLower();
-                                
-                                if (normalizedFile.Contains(normalizedSearch) || normalizedSearch.Contains(normalizedFile))
+                                string esmName = System.IO.Path.GetFileNameWithoutExtension(esmFilename);
+                                // Skip if we already checked this one
+                                if (string.Equals(esmName, preferredESMName, StringComparison.OrdinalIgnoreCase))
+                                    continue;
+                                    
+                                string textureDir = System.IO.Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Textures", esmName);
+                                texturePath = FindTextureInCacheDirectories(textureDir, namesToTry, vtexIndex);
+                                if (texturePath != null)
                                 {
-                                    // Check if it's a valid texture extension
-                                    string fileExt = System.IO.Path.GetExtension(fileName).ToLower();
-                                    if (fileExt == ".png" || fileExt == ".dds" || fileExt == ".tga")
-                                    {
-                                        texturePath = file;
-                                        foundBaseName = fileName;
-                                        //UnityEngine.Debug.Log($"[VTEX {vtexIndex}] ✓ Found via fuzzy match: {fileName}");
+                                    foundBaseName = System.IO.Path.GetFileName(texturePath);
                                         break;
-                                    }
                                 }
                             }
                         }
@@ -2203,15 +1730,310 @@ namespace ESMSharp.TES3Terrain
                     }
                     else if (texture == null)
                     {
-                        // Only show "not found" warning if texture is actually null (not found in library and file doesn't exist)
+                        // Texture not found in cache - try extracting from BSAs
+                        // Use the same approach as GatherLandTextures: get all BSA file names first
+                        HashSet<string> allBSAFiles = TESBSALibrary.GetAllFileNames();
+                        bool extractedFromBSA = false;
+                        string[] loadedESMs = TESESMLibrary.GetLoadedESMFilenames();
+                        
+                        foreach (string textureName in namesToTry)
+                        {
+                            if (extractedFromBSA) break;
+                            
+                            // Sanitize texture name (remove null characters, trim whitespace)
+                            string sanitizedTextureName = textureName;
+                            if (!string.IsNullOrEmpty(sanitizedTextureName))
+                            {
+                                sanitizedTextureName = sanitizedTextureName.TrimEnd('\0', ' ', '\t', '\r', '\n');
+                                sanitizedTextureName = sanitizedTextureName.Replace("\0", ""); // Remove any remaining null characters
+                                sanitizedTextureName = sanitizedTextureName.Trim();
+                            }
+                            
+                            if (string.IsNullOrEmpty(sanitizedTextureName))
+                                continue;
+                            
+                            string baseName = System.IO.Path.GetFileNameWithoutExtension(sanitizedTextureName);
+                            
+                            // Sanitize baseName as well (in case Path.GetFileNameWithoutExtension didn't catch everything)
+                            if (!string.IsNullOrEmpty(baseName))
+                            {
+                                baseName = baseName.TrimEnd('\0', ' ', '\t', '\r', '\n');
+                                baseName = baseName.Replace("\0", "");
+                                baseName = baseName.Trim();
+                            }
+                            
+                            if (string.IsNullOrEmpty(baseName))
+                                continue;
+                            
+                            // Try multiple BSA path variations (try both forward and backslash)
+                            List<string> bsaPathVariations = new List<string>();
+                            bsaPathVariations.Add(sanitizedTextureName.Replace('/', '\\'));  // Original path with backslash
+                            bsaPathVariations.Add(sanitizedTextureName.Replace('\\', '/'));  // Original path with forward slash
+                            bsaPathVariations.Add(baseName);  // Just the filename
+                            bsaPathVariations.Add($"textures\\{baseName}");  // textures\filename
+                            bsaPathVariations.Add($"textures/{baseName}");  // textures/filename
+                            bsaPathVariations.Add($"textures\\landscape\\{baseName}");  // textures\landscape\filename
+                            bsaPathVariations.Add($"textures/landscape/{baseName}");  // textures/landscape/filename
+                            bsaPathVariations.Add($"textures\\terrain\\{baseName}");  // textures\terrain\filename
+                            bsaPathVariations.Add($"textures/terrain/{baseName}");  // textures/terrain/filename
+                            bsaPathVariations.Add($"textures\\tx\\{baseName}");  // textures\tx\filename
+                            bsaPathVariations.Add($"textures/tx/{baseName}");  // textures/tx/filename
+                            
+                            string[] bsaExtensions = new[] { ".dds", ".tga", ".png" };
+                            
+                            string foundPath = null;
+                            string usedName = null;
+                            
+                            // Search in the HashSet first (faster, case-insensitive)
+                            foreach (string bsaPathBase in bsaPathVariations)
+                            {
+                                if (foundPath != null) break;
+                                
+                                foreach (string ext in bsaExtensions)
+                                {
+                                    string bsaFileName = bsaPathBase + ext;
+                                    
+                                    // Check in HashSet (case-insensitive)
+                                    if (allBSAFiles.Contains(bsaFileName))
+                                    {
+                                        foundPath = bsaFileName;
+                                        usedName = textureName;
+                                        break;
+                                    }
+                                }
+                            }
+                            
+                            // If not found in common paths, try case-insensitive search in HashSet
+                            if (foundPath == null)
+                            {
+                                foreach (string bsaFileName in allBSAFiles)
+                                {
+                                    string bsaBaseName = System.IO.Path.GetFileName(bsaFileName);
+                                    string bsaBaseNameNoExt = System.IO.Path.GetFileNameWithoutExtension(bsaBaseName);
+                                    
+                                    // Try matching by base filename
+                                    if (bsaBaseNameNoExt.Equals(baseName, StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        foundPath = bsaFileName;
+                                        usedName = textureName;
+                                        break;
+                                    }
+                                }
+                            }
+                            
+                            if (foundPath != null)
+                            {
+                                // Determine which ESM's BSA contains this file and get the exact path format
+                                var esmEntries = TESESMLibrary.GetLoadedESMEntries();
+                                string sourceESM = null;
+                                string exactBSAPath = null;
+                                
+                                foreach (var esmEntry in esmEntries)
+                                {
+                                    var bsaEntry = TESBSALibrary.GetBSAEntryForESM(esmEntry.ESMFilename);
+                                    if (bsaEntry != null && bsaEntry.IsLoaded)
+                                    {
+                                        // Check if the found path exists in this BSA (try path variations)
+                                        if (bsaEntry.FileNames.Contains(foundPath))
+                                        {
+                                            exactBSAPath = foundPath;
+                                            sourceESM = System.IO.Path.GetFileNameWithoutExtension(esmEntry.ESMFilename);
+                                            break;
+                                        }
+                                        // Try with different path separators
+                                        string foundPathAlt = foundPath.Replace('\\', '/');
+                                        if (foundPathAlt != foundPath && bsaEntry.FileNames.Contains(foundPathAlt))
+                                        {
+                                            exactBSAPath = foundPathAlt;
+                                            sourceESM = System.IO.Path.GetFileNameWithoutExtension(esmEntry.ESMFilename);
+                                            break;
+                                        }
+                                        string foundPathAlt2 = foundPath.Replace('/', '\\');
+                                        if (foundPathAlt2 != foundPath && bsaEntry.FileNames.Contains(foundPathAlt2))
+                                        {
+                                            exactBSAPath = foundPathAlt2;
+                                            sourceESM = System.IO.Path.GetFileNameWithoutExtension(esmEntry.ESMFilename);
+                                            break;
+                                        }
+                                        // Try filename-only match
+                                        string baseFilename = System.IO.Path.GetFileName(foundPath);
+                                        foreach (string bsaFileName in bsaEntry.FileNames)
+                                        {
+                                            if (System.IO.Path.GetFileName(bsaFileName).Equals(baseFilename, StringComparison.OrdinalIgnoreCase))
+                                            {
+                                                exactBSAPath = bsaFileName;
+                                                sourceESM = System.IO.Path.GetFileNameWithoutExtension(esmEntry.ESMFilename);
+                                                break;
+                                            }
+                                        }
+                                        if (!string.IsNullOrEmpty(exactBSAPath)) break;
+                                    }
+                                }
+                                
+                                if (string.IsNullOrEmpty(sourceESM))
+                                {
+                                    // Fallback: use first loaded ESM
+                                    if (esmEntries.Length > 0)
+                                    {
+                                        sourceESM = System.IO.Path.GetFileNameWithoutExtension(esmEntries[0].ESMFilename);
+                                    }
+                                }
+                                
+                                // Use the exact BSA path if we found it, otherwise use the found path
+                                string pathToExtract = exactBSAPath ?? foundPath;
+                                
+                                // Extract to the correct ESM cache directory
+                                string targetCacheDir = System.IO.Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Textures", sourceESM);
+                                System.IO.Directory.CreateDirectory(targetCacheDir);
+                                
+                                // Get the actual extension from the BSA path
+                                string bsaExtension = System.IO.Path.GetExtension(pathToExtract).ToLower();
+                                string outputPath = System.IO.Path.Combine(targetCacheDir, baseName + bsaExtension);
+                                
+                                if (TESBSALibrary.ExtractFile(pathToExtract, outputPath))
+                                {
+                                    UnityEngine.Debug.Log($"[VTEX {vtexIndex}] Extracted texture from BSA: {foundPath} -> {System.IO.Path.GetFileName(outputPath)} (from {sourceESM})");
+                                    
+                                    // Convert to PNG if needed
+                                    if (bsaExtension == ".dds" || bsaExtension == ".tga")
+                                    {
+                                        string pngPath = System.IO.Path.ChangeExtension(outputPath, ".png");
+                                        
+                                        if (bsaExtension == ".dds")
+                                        {
+                                            try
+                                            {
+                                                byte[] ddsData = System.IO.File.ReadAllBytes(outputPath);
+                                                if (ConvertDDSToPNG(ddsData, pngPath))
+                                                {
+                                                    #if UNITY_EDITOR
+                                                    SetTextureImportSettings(pngPath);
+                                                    #endif
+                                                    texturePath = pngPath;
+                                                    foundBaseName = baseName + ".png";
+                                                    extractedFromBSA = true;
+                                                    break;
+                                                }
+                                            }
+                                            catch (System.Exception ex)
+                                            {
+                                                UnityEngine.Debug.LogWarning($"[VTEX {vtexIndex}] Error converting extracted DDS to PNG: {ex.Message}");
+                                            }
+                                        }
+                                        else if (bsaExtension == ".tga")
+                                        {
+                                            try
+                                            {
+                                                byte[] tgaData = System.IO.File.ReadAllBytes(outputPath);
+                                                Texture2D tempTexture = new Texture2D(2, 2);
+                                                if (tempTexture.LoadImage(tgaData))
+                                                {
+                                                    Texture2D rgbaTexture = new Texture2D(tempTexture.width, tempTexture.height, TextureFormat.RGBA32, false);
+                                                    Color32[] pixels = tempTexture.GetPixels32();
+                                                    for (int i = 0; i < pixels.Length; i++)
+                                                    {
+                                                        pixels[i].a = 255;
+                                                    }
+                                                    rgbaTexture.SetPixels32(pixels);
+                                                    rgbaTexture.Apply();
+                                                    
+                                                    byte[] pngData = rgbaTexture.EncodeToPNG();
+                                                    System.IO.File.WriteAllBytes(pngPath, pngData);
+                                                    UnityEngine.Object.DestroyImmediate(tempTexture);
+                                                    UnityEngine.Object.DestroyImmediate(rgbaTexture);
+                                                    #if UNITY_EDITOR
+                                                    SetTextureImportSettings(pngPath);
+                                                    #endif
+                                                    texturePath = pngPath;
+                                                    foundBaseName = baseName + ".png";
+                                                    extractedFromBSA = true;
+                                                    break;
+                                                }
+                                                UnityEngine.Object.DestroyImmediate(tempTexture);
+                                            }
+                                            catch (System.Exception ex)
+                                            {
+                                                UnityEngine.Debug.LogWarning($"[VTEX {vtexIndex}] Error converting extracted TGA to PNG: {ex.Message}");
+                                            }
+                                        }
+                                    }
+                                    else
+                                    {
+                                        // Already PNG
+                                        texturePath = outputPath;
+                                        foundBaseName = baseName + ".png";
+                                        extractedFromBSA = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // If we extracted from BSA, try loading the texture again
+                        if (extractedFromBSA && texturePath != null && System.IO.File.Exists(texturePath))
+                        {
+                            try
+                            {
+                                byte[] textureData = System.IO.File.ReadAllBytes(texturePath);
+                                texture = new Texture2D(2, 2);
+                                if (texture.LoadImage(textureData))
+                                {
+                                    texture.wrapMode = TextureWrapMode.Repeat;
+                                    texture.filterMode = FilterMode.Bilinear;
+                                    texture.anisoLevel = 9;
+                                    #if UNITY_EDITOR
+                                    texture.Apply(true, false);
+                                    #else
+                                    texture.Apply(false, false);
+                                    #endif
+                                    
+                                    #if UNITY_EDITOR
+                                    SetTextureImportSettings(texturePath);
+                                    #endif
+                                    
+                                    string textureName = names.primary ?? names.fallback ?? foundBaseName ?? System.IO.Path.GetFileNameWithoutExtension(texturePath);
+                                    cachedEntry = TESLTextureLibrary.AddTexture(textureName, ltexIndex, vtexIndex, texturePath, texture);
+                                    
+                                    UnityEngine.Debug.Log($"[VTEX {vtexIndex}] Successfully loaded extracted texture: {System.IO.Path.GetFileName(texturePath)}");
+                                }
+                                else
+                                {
+                                    UnityEngine.Debug.LogWarning($"[VTEX {vtexIndex}] Failed to load extracted texture image data");
+                                    usePlaceholder = true;
+                                }
+                            }
+                            catch (System.Exception ex)
+                            {
+                                UnityEngine.Debug.LogWarning($"[VTEX {vtexIndex}] Error loading extracted texture: {ex.Message}");
+                                usePlaceholder = true;
+                            }
+                        }
+                        else if (!extractedFromBSA)
+                        {
+                            // Only show "not found" warning if we didn't try BSA extraction or it failed
                         string triedNames = string.Join(", ", namesToTry);
                         string triedWithExts = string.Join(", ", namesToTry.SelectMany(n => 
                         {
                             string baseName = System.IO.Path.GetFileNameWithoutExtension(n);
                             return new[] { ".png", ".dds", ".tga" }.Select(ext => baseName + ext);
                         }).Distinct());
-                        UnityEngine.Debug.LogWarning($"[VTEX {vtexIndex}] Texture file not found for VTEX {vtexIndex} (LTEX {ltexIndex}) (tried: {triedNames}) (with extensions: {triedWithExts}) (searched in: {textureDir}), using placeholder");
+                            
+                            // Build list of directories that were searched
+                            List<string> searchedDirs = new List<string>();
+                            foreach (string esmFilename in loadedESMs)
+                            {
+                                string esmName = System.IO.Path.GetFileNameWithoutExtension(esmFilename);
+                                string dir = System.IO.Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Textures", esmName);
+                                if (Directory.Exists(dir))
+                                {
+                                    searchedDirs.Add(esmName);
+                                }
+                            }
+                            string searchedDirsStr = searchedDirs.Count > 0 ? string.Join(", ", searchedDirs) : "none (directories don't exist)";
+                            
+                            UnityEngine.Debug.LogWarning($"[VTEX {vtexIndex}] Texture file not found for VTEX {vtexIndex} (LTEX {ltexIndex}) (tried: {triedNames}) (with extensions: {triedWithExts}) (searched in ESM cache dirs: {searchedDirsStr}, checked all BSAs), using placeholder");
                         usePlaceholder = true;
+                        }
                     }
 
                     // Use placeholder if texture failed to load or wasn't found
@@ -3657,6 +3479,10 @@ namespace ESMSharp.TES3Terrain
         /// <summary>
         /// TEST FUNCTION: Generate heightmap using merged_lands algorithm exactly
         /// This resets height at the start of each row to the first column value, preventing scanlines
+        /// 
+        /// NOTE: This function uses records from ALL ESM files to create one unified terrain.
+        /// ESM load order is important - later ESM files can override LAND/CELL records from earlier ones.
+        /// See TESESMLibrary.ScanAndLoadESMs() for details on ESM stacking and load order.
         /// </summary>
         public void GenerateHeightMap_MergedLands(Record[] _records, string esm = "Morrowind")
         {
@@ -3870,9 +3696,11 @@ namespace ESMSharp.TES3Terrain
             
             // Create extracted heightmap (64x64 per cell)
             float[][] extractedHeights = new float[extractedHeight][];
+            bool[][] extractedHeightsValid = new bool[extractedHeight][]; // Track which pixels were written
             for (int i = 0; i < extractedHeight; i++)
             {
                 extractedHeights[i] = new float[extractedWidth];
+                extractedHeightsValid[i] = new bool[extractedWidth];
             }
             
             // Extract 64x64 chunks from the 65x65 cell data
@@ -3880,6 +3708,13 @@ namespace ESMSharp.TES3Terrain
             {
                 for (int cellX = 0; cellX < numCellsX; cellX++)
                 {
+                    // Calculate actual cell coordinates
+                    int actualCellX = Convert.ToInt32(MinCellX) + cellX;
+                    int actualCellY = Convert.ToInt32(MinCellY) + cellY;
+                    
+                    // Check if this cell exists in cellData
+                    bool cellExists = cellData.ContainsKey((actualCellX, actualCellY));
+                    
                     // Source position in 65x65 grid
                     int srcCellStartX = cellX * (int)TESGlobals.HEIGHTMAP_CELL_SIZE;
                     int srcCellStartY = cellY * (int)TESGlobals.HEIGHTMAP_CELL_SIZE;
@@ -3901,6 +3736,7 @@ namespace ESMSharp.TES3Terrain
                             if (srcX < width && srcY < height && dstX < extractedWidth && dstY < extractedHeight)
                             {
                                 extractedHeights[dstY][dstX] = globalHeights[srcY][srcX];
+                                extractedHeightsValid[dstY][dstX] = cellExists; // Mark as valid only if cell exists
                             }
                         }
                     }
@@ -3910,6 +3746,7 @@ namespace ESMSharp.TES3Terrain
             UnityEngine.Debug.Log($"Extracted heightmap dimensions: {extractedWidth}x{extractedHeight} (from {width}x{height} with 64x64 per cell)");
             
             // Find min/max from EXTRACTED heights (not global heights) for PNG normalization
+            // Only consider valid (existing) cells
             float globalMinHeight = float.MaxValue;
             float globalMaxHeight = float.MinValue;
             bool foundValidHeight = false;
@@ -3918,9 +3755,10 @@ namespace ESMSharp.TES3Terrain
             {
                 for (int x = 0; x < extractedWidth; x++)
                 {
-                    float h = extractedHeights[y][x];
-                    if (h != 0f || foundValidHeight) // Allow 0 if we've found other heights
+                    // Only consider heights from valid (existing) cells
+                    if (extractedHeightsValid[y][x])
                     {
+                        float h = extractedHeights[y][x];
                         if (!foundValidHeight)
                         {
                             globalMinHeight = h;
@@ -3956,23 +3794,33 @@ namespace ESMSharp.TES3Terrain
                 {
                     for (int x = 0; x < extractedWidth; x++)
                     {
+                        // Check if this pixel is from a valid (existing) cell
+                        if (extractedHeightsValid[y][x])
+                    {
                         float h = extractedHeights[y][x];
                         // Normalize: min maps to 0.0 (black), max maps to 1.0 (white)
                         float heightValue = (h - globalMinHeight) / globalHeightRange;
                         heightValue = Mathf.Clamp01(heightValue);
                         heightPixels[y * extractedWidth + x] = new UnityEngine.Color(heightValue, heightValue, heightValue, 1f);
+                        }
+                        else
+                        {
+                            // Set non-existent cells to black (sea level) instead of transparent
+                            // This prevents cliff plateaus in areas where cells don't exist
+                            heightPixels[y * extractedWidth + x] = new UnityEngine.Color(0f, 0f, 0f, 1f);
+                        }
                     }
                 }
             }
             else
             {
-                // If no valid heights found, set all pixels to a default gray value (0.5 = sea level)
-                UnityEngine.Debug.LogWarning("PNG export: No valid heights found, using default gray (0.5) for all pixels");
+                // If no valid heights found, set all pixels to black (sea level) instead of transparent
+                UnityEngine.Debug.LogWarning("PNG export: No valid heights found, using black (sea level) for all pixels");
                 for (int y = 0; y < extractedHeight; y++)
                 {
                     for (int x = 0; x < extractedWidth; x++)
                     {
-                        heightPixels[y * extractedWidth + x] = new UnityEngine.Color(0.5f, 0.5f, 0.5f, 1f);
+                        heightPixels[y * extractedWidth + x] = new UnityEngine.Color(0f, 0f, 0f, 1f);
                     }
                 }
             }
@@ -4263,7 +4111,24 @@ namespace ESMSharp.TES3Terrain
                             normalizedHeight = Mathf.Clamp01(normalizedHeight); // Final safety clamp
                             heightPixels[y * width + x] = new UnityEngine.Color(normalizedHeight, normalizedHeight, normalizedHeight, 1f);
                         }
-                        // Leave unwritten pixels as black (default) - these are transparent areas
+                        else
+                        {
+                            // Set unwritten pixels (non-existent cells) to black (sea level) instead of transparent
+                            // This prevents cliff plateaus in areas where cells don't exist
+                            heightPixels[y * width + x] = new UnityEngine.Color(0f, 0f, 0f, 1f);
+                        }
+                    }
+                }
+            }
+            else
+            {
+                // If no valid heights found, set all pixels to black (sea level) instead of transparent
+                UnityEngine.Debug.LogWarning("Height map: No valid heights found, using black (sea level) for all pixels");
+                for (int y = 0; y < height; y++)
+                {
+                    for (int x = 0; x < width; x++)
+                    {
+                        heightPixels[y * width + x] = new UnityEngine.Color(0f, 0f, 0f, 1f);
                     }
                 }
             }
@@ -5041,6 +4906,77 @@ namespace ESMSharp.TES3Terrain
                     }
                 }
             }
+        }
+
+        /// <summary>
+        /// Helper method to search for a texture in a specific cache directory
+        /// </summary>
+        private string FindTextureInCacheDirectories(string textureDir, List<string> namesToTry, ushort vtexIndex)
+        {
+            if (!Directory.Exists(textureDir))
+                return null;
+                
+            string[] files = Directory.GetFiles(textureDir);
+            //UnityEngine.Debug.Log($"[VTEX {vtexIndex}] Searching in directory '{textureDir}' with {files.Length} files");
+            
+            // For each name to try, search with multiple extensions
+            foreach (string nameToTry in namesToTry)
+            {
+                string baseNameNoExt = System.IO.Path.GetFileNameWithoutExtension(nameToTry);
+                
+                // Try multiple extensions: PNG (converted from DDS/TGA), DDS (if not converted), TGA, and original
+                string[] extensions = new[] { ".png", ".dds", ".tga" };
+                string originalExt = System.IO.Path.GetExtension(nameToTry);
+                if (!string.IsNullOrEmpty(originalExt) && !extensions.Contains(originalExt.ToLower()))
+                {
+                    extensions = new[] { originalExt.ToLower() }.Concat(extensions).ToArray();
+                }
+                
+                foreach (string ext in extensions)
+                {
+                    string searchFilename = baseNameNoExt + ext;
+                    
+                    foreach (string file in files)
+                    {
+                        string fileName = System.IO.Path.GetFileName(file);
+                        // Case-insensitive comparison
+                        if (fileName.Equals(searchFilename, StringComparison.OrdinalIgnoreCase))
+                        {
+                            //UnityEngine.Debug.Log($"[VTEX {vtexIndex}] ✓ Found: {fileName} in {textureDir}");
+                            return file;
+                        }
+                    }
+                }
+            }
+            
+            // If still not found, try a more aggressive search - check if any file contains the base name
+            if (namesToTry.Count > 0)
+            {
+                string firstBaseName = System.IO.Path.GetFileNameWithoutExtension(namesToTry[0]);
+                
+                foreach (string file in files)
+                {
+                    string fileName = System.IO.Path.GetFileName(file);
+                    string fileNameNoExt = System.IO.Path.GetFileNameWithoutExtension(fileName);
+                    
+                    // Try removing underscores and spaces for comparison
+                    string normalizedSearch = firstBaseName.Replace("_", "").Replace(" ", "").Replace("-", "").ToLower();
+                    string normalizedFile = fileNameNoExt.Replace("_", "").Replace(" ", "").Replace("-", "").ToLower();
+                    
+                    if (normalizedFile.Contains(normalizedSearch) || normalizedSearch.Contains(normalizedFile))
+                    {
+                        // Check if it's a valid texture extension
+                        string fileExt = System.IO.Path.GetExtension(fileName).ToLower();
+                        if (fileExt == ".png" || fileExt == ".dds" || fileExt == ".tga")
+                        {
+                            //UnityEngine.Debug.Log($"[VTEX {vtexIndex}] ✓ Found via fuzzy match: {fileName} in {textureDir}");
+                            return file;
+                        }
+                    }
+                }
+            }
+            
+            return null;
         }
 
     }

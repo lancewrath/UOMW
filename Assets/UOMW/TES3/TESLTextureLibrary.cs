@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
+using BSASharp;
 
 namespace ESMSharp.TES3
 {
@@ -19,6 +21,7 @@ namespace ESMSharp.TES3
             public int LTEXIndex { get; set; }             // LTEX index (texture record index)
             public ushort VTEXIndex { get; set; }          // VTEX index (VTEX = LTEX + 1, used for terrain)
             public string Filename { get; set; }          // Full file path or filename
+            public string ESMFilename { get; set; }        // ESM filename this texture came from (for BSA lookup)
             public Texture2D Texture { get; set; }        // The actual Texture2D object
             public Texture2D NormalMap { get; set; }      // Normal map texture (generated or loaded)
             
@@ -28,6 +31,7 @@ namespace ESMSharp.TES3
                 LTEXIndex = ltexIndex;
                 VTEXIndex = vtexIndex;
                 Filename = filename;
+                ESMFilename = null;
                 Texture = texture;
                 NormalMap = null;
             }
@@ -137,6 +141,78 @@ namespace ESMSharp.TES3
                 return null;
                 
             _cacheByName.TryGetValue(name, out TextureEntry entry);
+            return entry;
+        }
+        
+        /// <summary>
+        /// Registers an LTEX record in the library (without loading the texture yet).
+        /// This should be called when processing ESM files to pre-register all texture records.
+        /// </summary>
+        /// <param name="name">Texture name from LTEX NAME subrecord (will be sanitized)</param>
+        /// <param name="ltexIndex">LTEX index from INTV subrecord</param>
+        /// <param name="filename">Texture filename from DATA subrecord (will be sanitized)</param>
+        /// <param name="esmFilename">ESM filename this record came from</param>
+        /// <returns>The registered texture entry (or existing entry if already registered)</returns>
+        public static TextureEntry RegisterLTEXRecord(string name, int ltexIndex, string filename, string esmFilename = null)
+        {
+            // Sanitize name (remove null characters, trim whitespace)
+            if (!string.IsNullOrEmpty(name))
+            {
+                name = name.TrimEnd('\0', ' ', '\t', '\r', '\n');
+                name = name.Replace("\0", "");
+                name = name.Trim();
+            }
+            
+            // Sanitize filename (remove null characters, trim whitespace)
+            if (!string.IsNullOrEmpty(filename))
+            {
+                filename = filename.TrimEnd('\0', ' ', '\t', '\r', '\n');
+                filename = filename.Replace("\0", "");
+                filename = filename.Trim();
+            }
+            
+            // Calculate VTEX index (VTEX = LTEX + 1)
+            ushort vtexIndex = (ushort)(ltexIndex + 1);
+            
+            // Check if already registered by LTEX index
+            if (_cacheByLTEXIndex.TryGetValue(ltexIndex, out TextureEntry existing))
+            {
+                // Update name and filename if they're missing or different
+                if (string.IsNullOrEmpty(existing.Name) && !string.IsNullOrEmpty(name))
+                {
+                    existing.Name = name;
+                    if (!string.IsNullOrEmpty(name))
+                    {
+                        _cacheByName[name] = existing;
+                    }
+                }
+                if (string.IsNullOrEmpty(existing.Filename) && !string.IsNullOrEmpty(filename))
+                {
+                    existing.Filename = filename;
+                }
+                return existing;
+            }
+            
+            // Create new entry (without Texture2D - will be loaded later)
+            TextureEntry entry = new TextureEntry(name ?? "", ltexIndex, vtexIndex, filename ?? "", null);
+            entry.ESMFilename = esmFilename; // Store which ESM this texture came from
+            
+            // Add to cache dictionaries
+            if (ltexIndex >= 0)
+            {
+                _cacheByLTEXIndex[ltexIndex] = entry;
+            }
+            
+            if (vtexIndex > 0) // VTEX 0 is default, skip it
+            {
+                _cacheByVTEXIndex[vtexIndex] = entry;
+            }
+            
+            if (!string.IsNullOrEmpty(name))
+            {
+                _cacheByName[name] = entry;
+            }
+            
             return entry;
         }
         
@@ -287,14 +363,50 @@ namespace ESMSharp.TES3
             if (string.IsNullOrEmpty(textureName) || string.IsNullOrEmpty(textureDir))
                 return null;
             
-            // Remove extension from texture name for searching
-            string baseName = System.IO.Path.GetFileNameWithoutExtension(textureName);
+            // Step 0: Check for pre-registered LTEX record and use its filename if available
+            TextureEntry registeredEntry = null;
+            if (ltexIndex >= 0)
+            {
+                registeredEntry = GetTextureByLTEXIndex(ltexIndex);
+            }
+            else if (vtexIndex > 0)
+            {
+                registeredEntry = GetTextureByVTEXIndex(vtexIndex);
+            }
+            
+            // If we have a registered entry with a filename, prefer that over the textureName parameter
+            string originalTextureName = textureName;
+            string originalTexturePath = textureName; // May include path like "textures\filename.dds"
+            string sourceESMFilename = esmName; // Default to provided esmName
+            
+            if (registeredEntry != null && !string.IsNullOrEmpty(registeredEntry.Filename))
+            {
+                // Use the filename from the LTEX record (this is the actual texture filename)
+                originalTextureName = registeredEntry.Filename;
+                originalTexturePath = registeredEntry.Filename;
+                
+                // Use the ESM filename from the registered entry if available (more accurate than esmName parameter)
+                if (!string.IsNullOrEmpty(registeredEntry.ESMFilename))
+                {
+                    sourceESMFilename = System.IO.Path.GetFileNameWithoutExtension(registeredEntry.ESMFilename);
+                }
+                
+                // If the registered entry already has a loaded texture, return it
+                if (registeredEntry.Texture != null)
+                {
+                    Debug.Log($"TESLTextureLibrary: Reusing loaded texture from LTEX record (LTEX {ltexIndex}, VTEX {vtexIndex}): {registeredEntry.Filename}");
+                    return registeredEntry;
+                }
+            }
+            
+            // Remove extension from texture name for cache searching
+            string baseName = System.IO.Path.GetFileNameWithoutExtension(originalTextureName);
             
             // Step 1: Check if already cached by VTEX index
             if (vtexIndex > 0)
             {
                 TextureEntry cached = GetTextureByVTEXIndex(vtexIndex);
-                if (cached != null)
+                if (cached != null && cached.Texture != null)
                 {
                     Debug.Log($"TESLTextureLibrary: Reusing cached texture (VTEX {vtexIndex}): {cached.Filename}");
                     return cached;
@@ -404,99 +516,391 @@ namespace ESMSharp.TES3
             // Step 4: If still not found, try extracting from BSA
             if (foundPath == null || !System.IO.File.Exists(foundPath))
             {
-                Debug.Log($"TESLTextureLibrary: Texture not found in cache, trying BSA extraction for: {baseName}");
+                Debug.Log($"TESLTextureLibrary: Texture not found in cache, trying BSA extraction for: {baseName} (original: '{originalTextureName}')");
                 
-                // Try multiple BSA path variations (Morrowind uses different path formats)
-                // Normalize to use backslashes (Morrowind BSA standard)
-                string[] bsaPathVariations = new[]
+                // Get all file names from all BSAs for searching (matching old GatherLandTextures approach)
+                HashSet<string> allBSAFiles = TESBSALibrary.GetAllFileNames();
+                
+                if (allBSAFiles.Count == 0)
                 {
-                    $"textures\\{baseName}",           // textures\filename
-                    $"textures\\landscape\\{baseName}", // textures\landscape\filename
-                    $"textures\\terrain\\{baseName}",    // textures\terrain\filename
-                    $"textures\\tx\\{baseName}"         // textures\tx\filename
-                };
+                    Debug.LogWarning($"TESLTextureLibrary: No BSA files loaded or no files found in BSAs");
+                }
                 
-                string[] bsaExtensions = new[] { ".dds", ".tga", ".png" };
-                
-                foreach (string bsaPathBase in bsaPathVariations)
+                // Preserve the original extension from the textureName (records may have .tga extension even if file is .dds)
+                string originalExtension = System.IO.Path.GetExtension(originalTextureName);
+                if (string.IsNullOrEmpty(originalExtension))
                 {
-                    foreach (string ext in bsaExtensions)
+                    originalExtension = ".dds"; // Default to .dds if no extension
+                }
+                originalExtension = originalExtension.ToLower();
+                
+                // Extract base filename from original texture name (matching old code approach)
+                string originalBaseFilename = System.IO.Path.GetFileName(originalTextureName);
+                string originalBaseNameNoExt = System.IO.Path.GetFileNameWithoutExtension(originalBaseFilename);
+                
+                // Build path variations - PRIORITIZE original extension from LTEX record
+                // Strategy: Try exact filename with original extension first, then path variations with original extension,
+                // then fall back to other extensions only if original extension fails
+                List<string> pathsToTryOriginalExt = new List<string>(); // Paths with original extension (try first)
+                List<string> pathsToTryOtherExts = new List<string>();  // Paths with other extensions (try second)
+                
+                // First, try the original texture name/path as-is with original extension
+                if (!string.IsNullOrEmpty(originalTexturePath))
+                {
+                    // Original path with normalized separators (matching old code)
+                    pathsToTryOriginalExt.Add(originalTexturePath.Replace('/', '\\'));
+                    // Just the filename from the original path (should already have extension)
+                    pathsToTryOriginalExt.Add(originalBaseFilename);
+                }
+                
+                // Then try common path variations with ORIGINAL extension first
+                pathsToTryOriginalExt.Add($"textures\\{originalBaseFilename}");  // textures\filename.ext (original)
+                pathsToTryOriginalExt.Add($"textures\\landscape\\{originalBaseFilename}");  // textures\landscape\filename.ext (original)
+                pathsToTryOriginalExt.Add($"textures\\terrain\\{originalBaseFilename}");  // textures\terrain\filename.ext (original)
+                pathsToTryOriginalExt.Add($"textures\\tx\\{originalBaseFilename}");  // textures\tx\filename.ext (original)
+                
+                // Also add just the base name with original extension (in case originalBaseFilename didn't have extension)
+                if (!originalBaseFilename.EndsWith(originalExtension, StringComparison.OrdinalIgnoreCase))
+                {
+                    pathsToTryOriginalExt.Add(originalBaseNameNoExt + originalExtension);  // Just filename with original extension
+                    pathsToTryOriginalExt.Add($"textures\\{originalBaseNameNoExt + originalExtension}");  // textures\filename.ext (original)
+                    pathsToTryOriginalExt.Add($"textures\\landscape\\{originalBaseNameNoExt + originalExtension}");  // textures\landscape\filename.ext (original)
+                    pathsToTryOriginalExt.Add($"textures\\terrain\\{originalBaseNameNoExt + originalExtension}");  // textures\terrain\filename.ext (original)
+                    pathsToTryOriginalExt.Add($"textures\\tx\\{originalBaseNameNoExt + originalExtension}");  // textures\tx\filename.ext (original)
+                }
+                
+                // Now build fallback paths with other extensions (only if original extension doesn't work)
+                List<string> otherExtensions = new List<string>();
+                if (originalExtension != ".dds") otherExtensions.Add(".dds");
+                if (originalExtension != ".tga") otherExtensions.Add(".tga");
+                if (originalExtension != ".png") otherExtensions.Add(".png");
+                
+                foreach (string ext in otherExtensions)
+                {
+                    pathsToTryOtherExts.Add(originalBaseNameNoExt + ext);  // Just filename with extension
+                    pathsToTryOtherExts.Add($"textures\\{originalBaseNameNoExt + ext}");  // textures\filename.ext
+                    pathsToTryOtherExts.Add($"textures\\landscape\\{originalBaseNameNoExt + ext}");  // textures\landscape\filename.ext
+                    pathsToTryOtherExts.Add($"textures\\terrain\\{originalBaseNameNoExt + ext}");  // textures\terrain\filename.ext
+                    pathsToTryOtherExts.Add($"textures\\tx\\{originalBaseNameNoExt + ext}");  // textures\tx\filename.ext
+                }
+                
+                string foundBSAPath = null;
+                string foundExt = null;
+                
+                // FIRST: Try paths with original extension (from LTEX record)
+                foreach (string bsaFileName in pathsToTryOriginalExt)
+                {
+                    // Check in our hashset first (faster, case-insensitive)
+                    if (allBSAFiles.Contains(bsaFileName))
                     {
-                        // Ensure consistent backslashes for BSA paths
-                        string bsaFileName = bsaPathBase.Replace('/', '\\') + ext;
-                        
-                        // Check if file exists in BSA
-                        if (TESBSALibrary.FileExists(bsaFileName, esmName + ".esm"))
+                        foundBSAPath = bsaFileName;
+                        foundExt = System.IO.Path.GetExtension(bsaFileName).ToLower();
+                        if (string.IsNullOrEmpty(foundExt))
                         {
-                            //Debug.Log($"TESLTextureLibrary: Found texture in BSA: {bsaFileName}");
-                            
-                            string outputPath = System.IO.Path.Combine(textureDir, baseName + ext);
-                            System.IO.Directory.CreateDirectory(textureDir);
-                            
-                            if (TESBSALibrary.ExtractFile(bsaFileName, outputPath, esmName + ".esm"))
+                            foundExt = originalExtension; // Fallback to original extension
+                        }
+                        Debug.Log($"TESLTextureLibrary: Found texture in BSA with original extension: {foundBSAPath}");
+                        break;
+                    }
+                }
+                
+                // SECOND: Only if original extension didn't work, try other extensions
+                if (foundBSAPath == null)
+                {
+                    foreach (string bsaFileName in pathsToTryOtherExts)
+                    {
+                        // Check in our hashset first (faster, case-insensitive)
+                        if (allBSAFiles.Contains(bsaFileName))
+                        {
+                            foundBSAPath = bsaFileName;
+                            foundExt = System.IO.Path.GetExtension(bsaFileName).ToLower();
+                            if (string.IsNullOrEmpty(foundExt))
                             {
-                                Debug.Log($"TESLTextureLibrary: Extracted texture from BSA: {bsaFileName} -> {System.IO.Path.GetFileName(outputPath)}");
-                                
-                                // Convert to PNG if needed
-                                if (ext == ".dds" || ext == ".tga")
+                                foundExt = originalExtension; // Fallback to original extension
+                            }
+                            Debug.Log($"TESLTextureLibrary: Found texture in BSA with fallback extension: {foundBSAPath} (original was {originalExtension})");
+                            break;
+                        }
+                    }
+                }
+                
+                // If not found with path variations, try case-insensitive filename search (matching old code)
+                if (foundBSAPath == null)
+                {
+                    // Use the already-extracted originalBaseFilename from above
+                    if (!string.IsNullOrEmpty(originalBaseFilename))
+                    {
+                        foreach (string bsaFileName in allBSAFiles)
+                        {
+                            string bsaBaseName = System.IO.Path.GetFileName(bsaFileName);
+                            if (bsaBaseName.Equals(originalBaseFilename, StringComparison.OrdinalIgnoreCase))
+                            {
+                                foundBSAPath = bsaFileName;
+                                foundExt = System.IO.Path.GetExtension(bsaFileName).ToLower();
+                                if (string.IsNullOrEmpty(foundExt))
                                 {
-                                    string pngPath = System.IO.Path.ChangeExtension(outputPath, ".png");
-                                    
-                                    if (ext == ".dds" && convertDDSToPNGFunc != null)
-                                    {
-                                        try
-                                        {
-                                            byte[] ddsData = System.IO.File.ReadAllBytes(outputPath);
-                                            if (convertDDSToPNGFunc(ddsData, pngPath))
-                                            {
-                                                #if UNITY_EDITOR
-                                                setTextureImportSettingsFunc?.Invoke(pngPath);
-                                                #endif
-                                                foundPath = pngPath;
-                                                foundExtension = ".png";
-                                                goto FoundTexture;
-                                            }
-                                        }
-                                        catch (Exception ex)
-                                        {
-                                            Debug.LogWarning($"TESLTextureLibrary: Error converting extracted DDS to PNG: {ex.Message}");
-                                        }
-                                    }
-                                    else if (ext == ".tga")
-                                    {
-                                        try
-                                        {
-                                            byte[] tgaData = System.IO.File.ReadAllBytes(outputPath);
-                                            Texture2D tempTexture = new Texture2D(2, 2);
-                                            if (tempTexture.LoadImage(tgaData))
-                                            {
-                                                byte[] pngData = tempTexture.EncodeToPNG();
-                                                System.IO.File.WriteAllBytes(pngPath, pngData);
-                                                UnityEngine.Object.DestroyImmediate(tempTexture);
-                                                #if UNITY_EDITOR
-                                                setTextureImportSettingsFunc?.Invoke(pngPath);
-                                                #endif
-                                                foundPath = pngPath;
-                                                foundExtension = ".png";
-                                                goto FoundTexture;
-                                            }
-                                            UnityEngine.Object.DestroyImmediate(tempTexture);
-                                        }
-                                        catch (Exception ex)
-                                        {
-                                            Debug.LogWarning($"TESLTextureLibrary: Error converting extracted TGA to PNG: {ex.Message}");
-                                        }
-                                    }
+                                    foundExt = originalExtension;
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+                
+                // If still not found, try partial match (filename without extension) - matching old code
+                if (foundBSAPath == null)
+                {
+                    string baseNameNoExt = System.IO.Path.GetFileNameWithoutExtension(originalTextureName);
+                    if (!string.IsNullOrEmpty(baseNameNoExt))
+                    {
+                        foreach (string bsaFileName in allBSAFiles)
+                        {
+                            string bsaBaseNameNoExt = System.IO.Path.GetFileNameWithoutExtension(bsaFileName);
+                            if (bsaBaseNameNoExt.Equals(baseNameNoExt, StringComparison.OrdinalIgnoreCase))
+                            {
+                                foundBSAPath = bsaFileName;
+                                foundExt = System.IO.Path.GetExtension(bsaFileName).ToLower();
+                                if (string.IsNullOrEmpty(foundExt))
+                                {
+                                    foundExt = originalExtension;
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+                
+                // If we found the file in a BSA, extract it directly (matching old GatherLandTextures approach)
+                if (foundBSAPath != null)
+                {
+                    //Debug.Log($"TESLTextureLibrary: Found texture in BSA: {foundBSAPath}");
+                    
+                    string outputPath = System.IO.Path.Combine(textureDir, baseName + foundExt);
+                    System.IO.Directory.CreateDirectory(textureDir);
+                    
+                    // Find which BSA contains this file and extract directly (matching old code)
+                    // Since we found it in the combined HashSet, we need to find which specific BSA has it
+                    // The path format in individual BSAs might differ, so we need to search through each BSA's FileNames
+                    bool extractSuccess = false;
+                    TESBSALibrary.BSAEntry foundBSAEntry = null;
+                    string exactBSAPath = null; // The exact path format as stored in the BSA
+                    
+                    // Use the source ESM from the registered entry if available (more accurate)
+                    string bsaLookupESM = sourceESMFilename;
+                    if (string.IsNullOrEmpty(bsaLookupESM))
+                    {
+                        bsaLookupESM = esmName; // Fallback to provided esmName
+                    }
+                    
+                    // Helper function to find file in a BSA entry (handles path separator variations)
+                    Func<TESBSALibrary.BSAEntry, string, (bool found, string exactPath)> findInBSA = (bsaEntry, searchPath) =>
+                    {
+                        if (bsaEntry == null)
+                        {
+                            return (false, null);
+                        }
+                        
+                        if (!bsaEntry.IsLoaded)
+                        {
+                            Debug.LogWarning($"TESLTextureLibrary: BSA entry for '{bsaEntry.BSAFilename}' is not loaded");
+                            return (false, null);
+                        }
+                        
+                        if (bsaEntry.FileNames == null || bsaEntry.FileNames.Count == 0)
+                        {
+                            Debug.LogWarning($"TESLTextureLibrary: BSA entry for '{bsaEntry.BSAFilename}' has no file names");
+                            return (false, null);
+                        }
+                        
+                        // Try exact match first
+                        if (bsaEntry.FileNames.Contains(searchPath))
+                        {
+                            return (true, searchPath);
+                        }
+                        
+                        // Try with different path separator
+                        string altPath1 = searchPath.Replace('\\', '/');
+                        if (altPath1 != searchPath && bsaEntry.FileNames.Contains(altPath1))
+                        {
+                            return (true, altPath1);
+                        }
+                        
+                        string altPath2 = searchPath.Replace('/', '\\');
+                        if (altPath2 != searchPath && bsaEntry.FileNames.Contains(altPath2))
+                        {
+                            return (true, altPath2);
+                        }
+                        
+                        // Try case-insensitive filename-only match
+                        string searchFileName = System.IO.Path.GetFileName(searchPath);
+                        foreach (string bsaFileName in bsaEntry.FileNames)
+                        {
+                            string bsaBaseName = System.IO.Path.GetFileName(bsaFileName);
+                            if (bsaBaseName.Equals(searchFileName, StringComparison.OrdinalIgnoreCase))
+                            {
+                                return (true, bsaFileName); // Return the exact path format from BSA
+                            }
+                        }
+                        
+                        return (false, null);
+                    };
+                    
+                    // Debug: Log what we're searching for
+                    Debug.Log($"TESLTextureLibrary: Searching for '{foundBSAPath}' in BSAs (sourceESM: '{bsaLookupESM}')");
+                    
+                    // Try source ESM first (from LTEX record)
+                    if (!string.IsNullOrEmpty(bsaLookupESM))
+                    {
+                        string esmKey = bsaLookupESM + ".esm";
+                        Debug.Log($"TESLTextureLibrary: Trying source ESM: {esmKey}");
+                        var sourceBSAEntry = TESBSALibrary.GetBSAEntryForESM(esmKey);
+                        if (sourceBSAEntry != null)
+                        {
+                            Debug.Log($"TESLTextureLibrary: Found BSA entry for source ESM: {sourceBSAEntry.BSAFilename} (IsLoaded: {sourceBSAEntry.IsLoaded}, FileCount: {sourceBSAEntry.FileNames?.Count ?? 0})");
+                        }
+                        else
+                        {
+                            Debug.LogWarning($"TESLTextureLibrary: No BSA entry found for source ESM: {esmKey}");
+                        }
+                        
+                        var (found, exactPath) = findInBSA(sourceBSAEntry, foundBSAPath);
+                        if (found)
+                        {
+                            foundBSAEntry = sourceBSAEntry;
+                            exactBSAPath = exactPath;
+                            Debug.Log($"TESLTextureLibrary: Found '{exactBSAPath}' in source ESM BSA: {foundBSAEntry.BSAFilename}");
+                        }
+                    }
+                    
+                    // If not in source ESM, search all BSAs
+                    if (foundBSAEntry == null)
+                    {
+                        Debug.Log($"TESLTextureLibrary: Searching all BSAs for '{foundBSAPath}'");
+                        var esmEntries = TESESMLibrary.GetLoadedESMEntries();
+                        Debug.Log($"TESLTextureLibrary: Checking {esmEntries?.Length ?? 0} loaded ESMs");
+                        
+                        foreach (var esmEntry in esmEntries)
+                        {
+                            var bsaEntry = TESBSALibrary.GetBSAEntryForESM(esmEntry.ESMFilename);
+                            if (bsaEntry != null)
+                            {
+                                Debug.Log($"TESLTextureLibrary: Checking BSA: {bsaEntry.BSAFilename} (IsLoaded: {bsaEntry.IsLoaded}, FileCount: {bsaEntry.FileNames?.Count ?? 0})");
+                            }
+                            
+                            var (found, exactPath) = findInBSA(bsaEntry, foundBSAPath);
+                            if (found)
+                            {
+                                foundBSAEntry = bsaEntry;
+                                exactBSAPath = exactPath;
+                                Debug.Log($"TESLTextureLibrary: Found '{exactBSAPath}' in BSA: {bsaEntry.BSAFilename}");
+                                break;
+                            }
+                        }
+                    }
+                    
+                    // Extract directly from the BSA (matching old code)
+                    if (foundBSAEntry != null && foundBSAEntry.Archive != null && !string.IsNullOrEmpty(exactBSAPath))
+                    {
+                        try
+                        {
+                            // Use the exact path format we found in the BSA's FileNames HashSet
+                            BSAFileEntry fileEntry = foundBSAEntry.Archive.GetFileEntry(exactBSAPath);
+                            
+                            if (fileEntry != null)
+                            {
+                                byte[] fileData = foundBSAEntry.Archive.ExtractFile(fileEntry);
+                                if (fileData != null && fileData.Length == fileEntry.FileSize)
+                                {
+                                    System.IO.File.WriteAllBytes(outputPath, fileData);
+                                    extractSuccess = true;
+                                    Debug.Log($"TESLTextureLibrary: Extracted '{exactBSAPath}' from '{foundBSAEntry.BSAFilename}' ({fileEntry.FileSize} bytes)");
                                 }
                                 else
                                 {
-                                    // Already PNG
-                                    foundPath = outputPath;
-                                    foundExtension = ".png";
-                                    goto FoundTexture;
+                                    Debug.LogWarning($"TESLTextureLibrary: Extracted data size mismatch for '{exactBSAPath}': expected {fileEntry.FileSize}, got {fileData?.Length ?? 0}");
+                                }
+                            }
+                            else
+                            {
+                                Debug.LogWarning($"TESLTextureLibrary: File entry not found for: {exactBSAPath} in BSA {foundBSAEntry.BSAFilename}");
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Debug.LogWarning($"TESLTextureLibrary: Failed to extract '{exactBSAPath}' from '{foundBSAEntry.BSAFilename}': {ex.Message}\n{ex.StackTrace}");
+                        }
+                    }
+                    else if (foundBSAPath != null)
+                    {
+                        Debug.LogWarning($"TESLTextureLibrary: Found '{foundBSAPath}' in BSA HashSet but could not find BSA entry (foundBSAEntry={foundBSAEntry != null}, archive={foundBSAEntry?.Archive != null}, exactBSAPath={exactBSAPath})");
+                    }
+                    
+                    if (extractSuccess)
+                    {
+                        Debug.Log($"TESLTextureLibrary: Extracted texture from BSA: {foundBSAPath} -> {System.IO.Path.GetFileName(outputPath)}");
+                        
+                        // Convert to PNG if needed
+                        if (foundExt == ".dds" || foundExt == ".tga")
+                        {
+                            string pngPath = System.IO.Path.ChangeExtension(outputPath, ".png");
+                            
+                            if (foundExt == ".dds" && convertDDSToPNGFunc != null)
+                            {
+                                try
+                                {
+                                    byte[] ddsData = System.IO.File.ReadAllBytes(outputPath);
+                                    if (convertDDSToPNGFunc(ddsData, pngPath))
+                                    {
+                                        #if UNITY_EDITOR
+                                        setTextureImportSettingsFunc?.Invoke(pngPath);
+                                        #endif
+                                        foundPath = pngPath;
+                                        foundExtension = ".png";
+                                        goto FoundTexture;
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    Debug.LogWarning($"TESLTextureLibrary: Error converting extracted DDS to PNG: {ex.Message}");
+                                }
+                            }
+                            else if (foundExt == ".tga")
+                            {
+                                try
+                                {
+                                    byte[] tgaData = System.IO.File.ReadAllBytes(outputPath);
+                                    Texture2D tempTexture = new Texture2D(2, 2);
+                                    if (tempTexture.LoadImage(tgaData))
+                                    {
+                                        byte[] pngData = tempTexture.EncodeToPNG();
+                                        System.IO.File.WriteAllBytes(pngPath, pngData);
+                                        UnityEngine.Object.DestroyImmediate(tempTexture);
+                                        #if UNITY_EDITOR
+                                        setTextureImportSettingsFunc?.Invoke(pngPath);
+                                        #endif
+                                        foundPath = pngPath;
+                                        foundExtension = ".png";
+                                        goto FoundTexture;
+                                    }
+                                    UnityEngine.Object.DestroyImmediate(tempTexture);
+                                }
+                                catch (Exception ex)
+                                {
+                                    Debug.LogWarning($"TESLTextureLibrary: Error converting extracted TGA to PNG: {ex.Message}");
                                 }
                             }
                         }
+                        else
+                        {
+                            // Already PNG
+                            foundPath = outputPath;
+                            foundExtension = ".png";
+                            goto FoundTexture;
+                        }
+                    }
+                    else
+                    {
+                        Debug.LogWarning($"TESLTextureLibrary: Found texture '{foundBSAPath}' in BSA but failed to extract it");
                     }
                 }
                 
@@ -574,7 +978,23 @@ namespace ESMSharp.TES3
                     
                     if (texture != null)
                     {
-                        return AddTexture(textureName, ltexIndex, vtexIndex, foundPath, texture);
+                        // If we have a registered entry, update it with the loaded texture
+                        if (registeredEntry != null)
+                        {
+                            registeredEntry.Texture = texture;
+                            registeredEntry.Filename = foundPath; // Update with actual loaded path
+                            
+                            // Also add to path cache
+                            string normalizedPath = System.IO.Path.GetFullPath(foundPath).ToLowerInvariant();
+                            _cacheByPath[normalizedPath] = registeredEntry;
+                            
+                            return registeredEntry;
+                        }
+                        else
+                        {
+                            // No registered entry, create new one
+                            return AddTexture(textureName, ltexIndex, vtexIndex, foundPath, texture);
+                        }
                     }
                 }
                 catch (Exception ex)

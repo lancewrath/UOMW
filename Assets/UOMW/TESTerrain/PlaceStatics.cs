@@ -2456,31 +2456,15 @@ namespace ESMSharp.TES3Terrain
         }
 
         /// <summary>
-        /// Tries to extract a NIF file from BSA archive
+        /// Tries to extract a NIF file from BSA archives using TESBSALibrary (supports multiple BSAs)
+        /// Searches all loaded BSAs in load order and extracts to the appropriate ESM cache directory
         /// </summary>
         private string TryExtractFromBSA(string modelId)
         {
             try
             {
-                // Open BSA if not already open
-                if (_bsaArchive == null)
-                {
-                    string bsaPath = Path.Combine(Application.dataPath, "StreamingAssets", "Data", _bsa);
-                    if (!File.Exists(bsaPath))
-                    {
-                        UnityEngine.Debug.LogWarning($"BSA file not found: {bsaPath}");
-                        return null;
-                    }
-
-                    _bsaArchive = new BSA();
-                    _bsaArchive.Open(bsaPath);
-                }
-
-                // Get all file names from BSA
-                HashSet<string> bsaFileNames = new HashSet<string>(_bsaArchive.GetFileNames(), StringComparer.OrdinalIgnoreCase);
-
-                // Try to find the model with various path variations
-                string[] pathVariations = new string[]
+                // Build path variations to search for
+                List<string> pathVariations = new List<string>
                 {
                     modelId + ".nif",
                     modelId + ".NIF",
@@ -2489,18 +2473,37 @@ namespace ESMSharp.TES3Terrain
                     "Meshes\\" + modelId + ".nif",
                     "Meshes/" + modelId + ".nif"
                 };
+                
+                // Try first letter subdirectory (common BSA organization) if modelId has at least 1 character
+                if (!string.IsNullOrEmpty(modelId) && modelId.Length > 0)
+                {
+                    string firstLetter = modelId.Substring(0, 1);
+                    pathVariations.AddRange(new string[]
+                    {
+                        "meshes\\" + firstLetter.ToLower() + "\\" + modelId + ".nif",
+                        "meshes/" + firstLetter.ToLower() + "/" + modelId + ".nif",
+                        "Meshes\\" + firstLetter.ToLower() + "\\" + modelId + ".nif",
+                        "Meshes/" + firstLetter.ToLower() + "/" + modelId + ".nif",
+                        "meshes\\" + firstLetter.ToUpper() + "\\" + modelId + ".nif",
+                        "meshes/" + firstLetter.ToUpper() + "/" + modelId + ".nif"
+                    });
+                }
 
+                // Get all file names from all BSAs
+                HashSet<string> allBSAFiles = TESBSALibrary.GetAllFileNames();
+                
+                // Try to find the model with various path variations
                 string foundPath = null;
                 foreach (string pathVar in pathVariations)
                 {
-                    if (bsaFileNames.Contains(pathVar))
+                    if (allBSAFiles.Contains(pathVar))
                     {
                         foundPath = pathVar;
                         break;
                     }
                 }
 
-                // Case-insensitive fallback - try multiple case variations
+                // Case-insensitive fallback - try multiple case variations and path patterns
                 if (foundPath == null)
                 {
                     string modelLower = modelId.ToLower();
@@ -2516,7 +2519,7 @@ namespace ESMSharp.TES3Terrain
                         modelOriginal + ".NIF"
                     };
                     
-                    foreach (string bsaFileName in bsaFileNames)
+                    foreach (string bsaFileName in allBSAFiles)
                     {
                         string bsaFileNameLower = bsaFileName.ToLower();
                         string bsaFileNameNoExt = Path.GetFileNameWithoutExtension(bsaFileName);
@@ -2527,12 +2530,15 @@ namespace ESMSharp.TES3Terrain
                             string caseVarNoExt = Path.GetFileNameWithoutExtension(caseVar);
                             if (string.Equals(bsaFileNameNoExt, caseVarNoExt, StringComparison.OrdinalIgnoreCase))
                             {
-                                // Also check path variations
-                                if (bsaFileNameLower.EndsWith("\\" + caseVar.ToLower()) ||
-                                    bsaFileNameLower.EndsWith("/" + caseVar.ToLower()) ||
-                                    bsaFileNameLower == caseVar.ToLower() ||
-                                    bsaFileNameLower.EndsWith("\\meshes\\" + caseVar.ToLower()) ||
-                                    bsaFileNameLower.EndsWith("/meshes/" + caseVar.ToLower()))
+                                // Check various path patterns (including subdirectories)
+                                string caseVarLower = caseVar.ToLower();
+                                if (bsaFileNameLower.EndsWith("\\" + caseVarLower) ||
+                                    bsaFileNameLower.EndsWith("/" + caseVarLower) ||
+                                    bsaFileNameLower == caseVarLower ||
+                                    bsaFileNameLower.EndsWith("\\meshes\\" + caseVarLower) ||
+                                    bsaFileNameLower.EndsWith("/meshes/" + caseVarLower) ||
+                                    bsaFileNameLower.Contains("\\meshes\\" + caseVarLower) ||
+                                    bsaFileNameLower.Contains("/meshes/" + caseVarLower))
                                 {
                                     foundPath = bsaFileName;
                                     break;
@@ -2547,20 +2553,40 @@ namespace ESMSharp.TES3Terrain
 
                 if (foundPath != null)
                 {
-                    // Extract to cache
-                    BSAFileEntry entry = _bsaArchive.GetFileEntry(foundPath);
-                    if (entry != null)
+                    // Find which ESM's BSA contains this file (search in load order)
+                    var esmEntries = TESESMLibrary.GetLoadedESMEntries();
+                    string sourceESM = null;
+                    
+                    foreach (var esmEntry in esmEntries)
                     {
-                        byte[] modelData = _bsaArchive.ExtractFile(entry);
-                        string cacheDir = Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Models", _esm);
-                        Directory.CreateDirectory(cacheDir);
-                        
-                        // Use just the filename (strip subdirectories)
-                        string outputFilename = Path.GetFileName(foundPath);
-                        string outputPath = Path.Combine(cacheDir, outputFilename);
-                        File.WriteAllBytes(outputPath, modelData);
-                        
-                        // UnityEngine.Debug.Log($"Extracted NIF from BSA: {foundPath} -> {outputFilename}"); // Commented out for performance
+                        var bsaEntry = TESBSALibrary.GetBSAEntryForESM(esmEntry.ESMFilename);
+                        if (bsaEntry != null && bsaEntry.IsLoaded && bsaEntry.FileNames.Contains(foundPath))
+                        {
+                            sourceESM = Path.GetFileNameWithoutExtension(esmEntry.ESMFilename);
+                            break;
+                        }
+                    }
+                    
+                    // If we couldn't determine source ESM, use preferred ESM or first loaded
+                    if (string.IsNullOrEmpty(sourceESM))
+                    {
+                        sourceESM = Path.GetFileNameWithoutExtension(_esm);
+                        if (string.IsNullOrEmpty(sourceESM) && esmEntries.Length > 0)
+                        {
+                            sourceESM = Path.GetFileNameWithoutExtension(esmEntries[0].ESMFilename);
+                        }
+                    }
+                    
+                    // Extract to cache using TESBSALibrary
+                    string outputFilename = Path.GetFileName(foundPath);
+                    string cacheDir = Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Models", sourceESM);
+                    Directory.CreateDirectory(cacheDir);
+                    string outputPath = Path.Combine(cacheDir, outputFilename);
+                    
+                    // Use TESBSALibrary to extract (it will find the correct BSA)
+                    if (TESBSALibrary.ExtractFile(foundPath, outputPath))
+                    {
+                        // UnityEngine.Debug.Log($"Extracted NIF from BSA: {foundPath} -> {outputFilename} (ESM: {sourceESM})"); // Commented out for performance
                         return outputFilename;
                     }
                 }
@@ -2925,6 +2951,7 @@ namespace ESMSharp.TES3Terrain
             TESCharacterManager.BodyPartEntry headPart = null;
             TESCharacterManager.BodyPartEntry hairPart = null;
             GameObject npcObj = null;
+            TESCharacterManager.NPCEntry npcEntry = null;
             
             try
             {
@@ -2947,7 +2974,7 @@ namespace ESMSharp.TES3Terrain
                     yield break;
                 }
 
-                TESCharacterManager.NPCEntry npcEntry = TESCharacterManager.GetNPC(npcId);
+                npcEntry = TESCharacterManager.GetNPC(npcId);
                 if (npcEntry == null)
                 {
                     UnityEngine.Debug.LogWarning($"PlaceNPC: NPC '{npcId}' not found in TESCharacterManager");
@@ -3026,6 +3053,35 @@ namespace ESMSharp.TES3Terrain
                 yield break;
             }
             
+            // Determine gender and race for skeleton selection
+            bool isFemale = false;
+            if (bodyPart != null && (bodyPart.Flags & 0x01) != 0)
+            {
+                isFemale = true;
+            }
+            else if (bodyPart != null && !string.IsNullOrEmpty(bodyPart.ModelFilename) && 
+                     bodyPart.ModelFilename.IndexOf("female", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                isFemale = true;
+            }
+            
+            bool isBeast = false;
+            if (npcEntry != null && !string.IsNullOrEmpty(npcEntry.RaceName))
+            {
+                string raceLower = npcEntry.RaceName.ToLowerInvariant();
+                isBeast = raceLower.Contains("khajiit") || raceLower.Contains("argonian");
+            }
+            
+            // Get skeleton model path
+            string skeletonPath = GetNPCSkeletonPath(isFemale, isBeast);
+            
+            // Load skeleton model first (this is the base that body parts attach to)
+            GameObject skeletonModel = null;
+            if (!string.IsNullOrEmpty(skeletonPath))
+            {
+                yield return LoadNIFModelCoroutine(skeletonPath, false, (loadedModel) => skeletonModel = loadedModel);
+            }
+            
             // Load body parts asynchronously (outside try-catch to allow yield return)
             int loadedPartsCount = 0;
             GameObject bodyModel = null;
@@ -3049,23 +3105,34 @@ namespace ESMSharp.TES3Terrain
             
             try
             {
+                // Attach skeleton if loaded
+                if (skeletonModel != null)
+                {
+                    skeletonModel.transform.SetParent(npcObj.transform, false);
+                    skeletonModel.name = "Skeleton";
+                    skeletonModel.transform.localScale = Vector3.one;
+                }
+                
+                // Attach body parts to skeleton if available, otherwise to NPC root
+                Transform parentTransform = skeletonModel != null ? skeletonModel.transform : npcObj.transform;
+                
                 if (bodyModel != null)
                 {
-                    bodyModel.transform.SetParent(npcObj.transform, false);
+                    bodyModel.transform.SetParent(parentTransform, false);
                     bodyModel.name = "Body";
                     loadedPartsCount++;
                 }
                 
                 if (headModel != null)
                 {
-                    headModel.transform.SetParent(npcObj.transform, false);
+                    headModel.transform.SetParent(parentTransform, false);
                     headModel.name = "Head";
                     loadedPartsCount++;
                 }
                 
                 if (hairModel != null)
                 {
-                    hairModel.transform.SetParent(npcObj.transform, false);
+                    hairModel.transform.SetParent(parentTransform, false);
                     hairModel.name = "Hair";
                     loadedPartsCount++;
                 }
@@ -3089,10 +3156,10 @@ namespace ESMSharp.TES3Terrain
                 if (yaw > 180f) yaw -= 360f;
                 npcObj.transform.rotation = Quaternion.Euler(euler.x, -yaw, euler.z);
 
-                Transform parentTransform = cellParent != null ? cellParent.transform : null;
-                if (parentTransform != null)
+                Transform cellParentTransform = cellParent != null ? cellParent.transform : null;
+                if (cellParentTransform != null)
                 {
-                    npcObj.transform.SetParent(parentTransform, worldPositionStays: true);
+                    npcObj.transform.SetParent(cellParentTransform, worldPositionStays: true);
                 }
 
                 placedCount++;
@@ -3248,6 +3315,9 @@ namespace ESMSharp.TES3Terrain
                 TESCharacterManager.BodyPartEntry headPart = null;
                 TESCharacterManager.BodyPartEntry hairPart = null;
                 
+                // Determine gender early (needed for both MODL lookup and default body part search)
+                bool isFemale = false;
+                
                 if (!string.IsNullOrEmpty(npcEntry.ModelFilename))
                 {
                     // MODL contains a body part ID, not a direct filename
@@ -3262,6 +3332,57 @@ namespace ESMSharp.TES3Terrain
                         if (bodyPart == null)
                         {
                             UnityEngine.Debug.LogWarning($"PlaceNPC: NPC '{npcId}' references body part '{cleanedBodyPartId}' (original: '{npcEntry.ModelFilename}') which was not found");
+                        }
+                    }
+                }
+                else
+                {
+                    // MODL is empty - try to find a default body part based on race and gender (following OpenMW logic)
+                    // First, get head part to determine gender
+                    if (!string.IsNullOrEmpty(npcEntry.HeadModel))
+                    {
+                        string cleanedHeadPartId = npcEntry.HeadModel.TrimEnd('\0', ' ', '\t', '\r', '\n');
+                        cleanedHeadPartId = cleanedHeadPartId.Replace("\0", "");
+                        cleanedHeadPartId = new string(cleanedHeadPartId.Where(c => c != '\0').ToArray()).Trim();
+                        if (!string.IsNullOrEmpty(cleanedHeadPartId))
+                        {
+                            var tempHeadPart = TESCharacterManager.GetBodyPart(cleanedHeadPartId);
+                            if (tempHeadPart != null)
+                            {
+                                isFemale = (tempHeadPart.Flags & 0x01) != 0;
+                            }
+                        }
+                    }
+                    
+                    // Search for body parts matching race, gender, and part type (Part = 3 = MP_Chest, PartType = 0 = MT_Skin)
+                    // Following OpenMW: search for body parts with MT_Skin type, matching race, matching gender
+                    if (!string.IsNullOrEmpty(npcEntry.RaceName))
+                    {
+                        var matchingBodyParts = TESCharacterManager.GetBodyPartsByPart(3) // MP_Chest
+                            .Where(bp => 
+                                bp.PartType == 0 && // MT_Skin (0 = Skin type)
+                                !string.IsNullOrEmpty(bp.RaceName) &&
+                                string.Equals(bp.RaceName, npcEntry.RaceName, StringComparison.OrdinalIgnoreCase) &&
+                                (bp.Flags & 0x01) == (isFemale ? 0x01 : 0x00)) // Match gender
+                            .ToList();
+                        
+                        if (matchingBodyParts.Count > 0)
+                        {
+                            bodyPart = matchingBodyParts[0];
+                            UnityEngine.Debug.Log($"PlaceNPC: NPC '{npcId}' has empty MODL, using default body part '{bodyPart.BodyPartId}' (race: '{npcEntry.RaceName}', gender: {(isFemale ? "female" : "male")})");
+                        }
+                    }
+                    
+                    // If still no body part found, try to find any chest body part matching gender
+                    if (bodyPart == null)
+                    {
+                        var anyChestPart = TESCharacterManager.GetBodyPartsByPart(3)
+                            .Where(bp => bp.PartType == 0 && (bp.Flags & 0x01) == (isFemale ? 0x01 : 0x00))
+                            .FirstOrDefault();
+                        if (anyChestPart != null)
+                        {
+                            bodyPart = anyChestPart;
+                            UnityEngine.Debug.Log($"PlaceNPC: NPC '{npcId}' has empty MODL, using fallback body part '{bodyPart.BodyPartId}' (gender: {(isFemale ? "female" : "male")})");
                         }
                     }
                 }
@@ -3353,20 +3474,66 @@ namespace ESMSharp.TES3Terrain
                     npcObj.transform.localScale = characterBaseScale * scale;
                 }
                 
+                // Determine gender and race for skeleton selection (if not already determined)
+                // Check body part flags for female flag (0x01)
+                if (bodyPart != null && (bodyPart.Flags & 0x01) != 0)
+                {
+                    isFemale = true;
+                }
+                // Also check if model filename contains "female" as fallback
+                else if (bodyPart != null && !string.IsNullOrEmpty(bodyPart.ModelFilename) && 
+                         bodyPart.ModelFilename.IndexOf("female", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    isFemale = true;
+                }
+                
+                // Check if race is a beast race (Khajiit or Argonian)
+                bool isBeast = false;
+                if (!string.IsNullOrEmpty(npcEntry.RaceName))
+                {
+                    string raceLower = npcEntry.RaceName.ToLowerInvariant();
+                    isBeast = raceLower.Contains("khajiit") || raceLower.Contains("argonian");
+                }
+                
+                // Get skeleton model path based on race and gender (following OpenMW logic)
+                string skeletonPath = GetNPCSkeletonPath(isFemale, isBeast);
+                
+                // Load skeleton model first (this is the base that body parts attach to)
+                GameObject skeletonModel = null;
+                if (!string.IsNullOrEmpty(skeletonPath))
+                {
+                    skeletonModel = LoadNIFModel(skeletonPath, false);
+                    if (skeletonModel != null)
+                    {
+                        skeletonModel.transform.SetParent(npcObj.transform, false);
+                        skeletonModel.name = "Skeleton";
+                        // Skeleton should be scaled the same as the NPC
+                        skeletonModel.transform.localScale = Vector3.one;
+                    }
+                    else
+                    {
+                        UnityEngine.Debug.LogWarning($"PlaceNPC: Failed to load skeleton model '{skeletonPath}' for NPC '{npcId}'. NPC will be placed without skeleton.");
+                    }
+                }
+                
                 // Load and attach body parts
                 // Note: Some body parts may fail to load due to niflib.net parsing limitations
                 // (e.g., "Invalid object type string length!" errors with certain NIF formats)
                 // We continue loading other parts even if some fail
                 int loadedPartsCount = 0;
                 
-                // Load body (main model)
+                // Determine parent transform for body parts (skeleton if available, otherwise NPC root)
+                Transform parentTransform = skeletonModel != null ? skeletonModel.transform : npcObj.transform;
+                
+                // Load body (main model) - this is the skin/torso that goes on the skeleton
                 if (bodyPart != null && !string.IsNullOrEmpty(bodyPart.ModelFilename))
                 {
                     UnityEngine.Debug.Log($"PlaceNPC: Loading body model for NPC '{npcId}': body part ID='{bodyPart.BodyPartId}', model filename='{bodyPart.ModelFilename}'");
                     GameObject bodyModel = LoadBodyPartModel(bodyPart.ModelFilename, bodyPart.BodyPartId);
                     if (bodyModel != null)
                     {
-                        bodyModel.transform.SetParent(npcObj.transform, false);
+                        // Attach to skeleton if available, otherwise to NPC root
+                        bodyModel.transform.SetParent(parentTransform, false);
                         bodyModel.name = "Body";
                         loadedPartsCount++;
                         UnityEngine.Debug.Log($"PlaceNPC: Successfully loaded body model for NPC '{npcId}'");
@@ -3394,7 +3561,8 @@ namespace ESMSharp.TES3Terrain
                     GameObject headModel = LoadBodyPartModel(headPart.ModelFilename, headPart.BodyPartId);
                     if (headModel != null)
                     {
-                        headModel.transform.SetParent(npcObj.transform, false);
+                        // Attach to skeleton if available, otherwise to NPC root
+                        headModel.transform.SetParent(parentTransform, false);
                         headModel.name = "Head";
                         loadedPartsCount++;
                     }
@@ -3410,7 +3578,8 @@ namespace ESMSharp.TES3Terrain
                     GameObject hairModel = LoadBodyPartModel(hairPart.ModelFilename, hairPart.BodyPartId);
                     if (hairModel != null)
                     {
-                        hairModel.transform.SetParent(npcObj.transform, false);
+                        // Attach to skeleton if available, otherwise to NPC root
+                        hairModel.transform.SetParent(parentTransform, false);
                         hairModel.name = "Hair";
                         loadedPartsCount++;
                     }
@@ -3455,10 +3624,10 @@ namespace ESMSharp.TES3Terrain
                 npcObj.transform.rotation = Quaternion.Euler(euler.x, -yaw, euler.z);
 
                 // Parent to cell or specified parent
-                Transform parentTransform = cellParent != null ? cellParent.transform : null;
-                if (parentTransform != null)
+                Transform cellParentTransform = cellParent != null ? cellParent.transform : null;
+                if (cellParentTransform != null)
                 {
-                    npcObj.transform.SetParent(parentTransform, worldPositionStays: true);
+                    npcObj.transform.SetParent(cellParentTransform, worldPositionStays: true);
                 }
 
                 // Add NPC component for future scripting/interaction
@@ -3474,6 +3643,33 @@ namespace ESMSharp.TES3Terrain
                 UnityEngine.Debug.LogError($"PlaceNPC: Exception while placing NPC '{npcId}' in cell ({cellGridX}, {cellGridY})");
                 failedCount++;
                 return false;
+            }
+        }
+        
+        /// <summary>
+        /// Gets the skeleton model path for an NPC based on gender and race.
+        /// Following OpenMW logic: baseanim.nif (male), baseanim_female.nif (female), baseanimkna.nif (beast races).
+        /// </summary>
+        /// <param name="isFemale">Whether the NPC is female</param>
+        /// <param name="isBeast">Whether the NPC is a beast race (Khajiit/Argonian)</param>
+        /// <returns>The skeleton model path, or null if unable to determine</returns>
+        private string GetNPCSkeletonPath(bool isFemale, bool isBeast)
+        {
+            // Based on OpenMW's getActorSkeleton function
+            // Beast races (Khajiit/Argonian) use baseanimkna.nif
+            if (isBeast)
+            {
+                return "baseanimkna.nif";
+            }
+            // Female NPCs use baseanim_female.nif
+            else if (isFemale)
+            {
+                return "baseanim_female.nif";
+            }
+            // Male NPCs use baseanim.nif
+            else
+            {
+                return "baseanim.nif";
             }
         }
         
@@ -3695,7 +3891,15 @@ namespace ESMSharp.TES3Terrain
                     yield break;
                 }
                 
-                UnityEngine.Debug.LogWarning($"LoadNIFModel: File not found: {modelFilename}");
+                // Log more details for skeleton files to help debug
+                if (modelFilename.Contains("baseanim") || modelFilename.Contains("skeleton"))
+                {
+                    UnityEngine.Debug.LogWarning($"LoadNIFModel: Skeleton file not found: {modelFilename}. Checked cache and BSA archive '{_bsa}'. Make sure the skeleton files are in the BSA or cache directory.");
+                }
+                else
+                {
+                    UnityEngine.Debug.LogWarning($"LoadNIFModel: File not found: {modelFilename}");
+                }
                 onComplete?.Invoke(null);
                 yield break;
             }
@@ -3788,9 +3992,10 @@ namespace ESMSharp.TES3Terrain
         }
 
         /// <summary>
-        /// Finds NIF file in cache directory with case-insensitive search
+        /// Finds NIF file in cache directories across all loaded ESMs with case-insensitive search
+        /// Checks all ESM cache directories in load order
         /// </summary>
-        private string FindNIFInCache(string esm, string modelFilename)
+        private string FindNIFInCache(string preferredESM, string modelFilename)
         {
             if (string.IsNullOrEmpty(modelFilename))
                 return null;
@@ -3798,21 +4003,56 @@ namespace ESMSharp.TES3Terrain
             // Normalize filename - extract just the filename part
             string normalizedFilename = modelFilename?.Replace('\\', '/');
             normalizedFilename = Path.GetFileName(normalizedFilename);
+            string searchFilename = Path.GetFileName(normalizedFilename);
+            string searchFilenameLower = searchFilename.ToLowerInvariant();
             
+            // Get all loaded ESMs in load order
+            string[] loadedESMs = TESESMLibrary.GetLoadedESMFilenames();
+            
+            // Try preferred ESM first if specified
+            if (!string.IsNullOrEmpty(preferredESM))
+            {
+                string preferredESMName = Path.GetFileNameWithoutExtension(preferredESM);
+                string cachePath = CheckCacheDirectory(preferredESMName, normalizedFilename, modelFilename, searchFilename, searchFilenameLower);
+                if (!string.IsNullOrEmpty(cachePath))
+                    return cachePath;
+            }
+            
+            // Check all ESM cache directories in load order
+            foreach (string esmFilename in loadedESMs)
+            {
+                string esmName = Path.GetFileNameWithoutExtension(esmFilename);
+                // Skip if we already checked this one
+                if (!string.IsNullOrEmpty(preferredESM) && string.Equals(esmName, Path.GetFileNameWithoutExtension(preferredESM), StringComparison.OrdinalIgnoreCase))
+                    continue;
+                    
+                string cachePath = CheckCacheDirectory(esmName, normalizedFilename, modelFilename, searchFilename, searchFilenameLower);
+                if (!string.IsNullOrEmpty(cachePath))
+                    return cachePath;
+            }
+
+            return null;
+        }
+        
+        /// <summary>
+        /// Helper method to check a single cache directory for a NIF file
+        /// </summary>
+        private string CheckCacheDirectory(string esmName, string normalizedFilename, string originalFilename, string searchFilename, string searchFilenameLower)
+        {
             // Try exact match first (with normalized path separators)
-            string cachePath = Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Models", esm, normalizedFilename);
+            string cachePath = Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Models", esmName, normalizedFilename);
             cachePath = cachePath.Replace('\\', '/');
             if (System.IO.File.Exists(cachePath))
                 return cachePath;
 
             // Try original filename as-is
-            string originalPath = Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Models", esm, modelFilename);
+            string originalPath = Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Models", esmName, originalFilename);
             originalPath = originalPath.Replace('\\', '/');
             if (System.IO.File.Exists(originalPath))
                 return originalPath;
 
             // Case-insensitive search - this is the most reliable method
-            string cacheDir = Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Models", esm);
+            string cacheDir = Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Models", esmName);
             cacheDir = cacheDir.Replace('\\', '/');
             if (System.IO.Directory.Exists(cacheDir))
             {
@@ -3827,9 +4067,6 @@ namespace ESMSharp.TES3Terrain
                     allFiles.Add(file);
                 }
                 
-                string searchFilename = Path.GetFileName(normalizedFilename);
-                string searchFilenameLower = searchFilename.ToLowerInvariant();
-                
                 foreach (string file in allFiles)
                 {
                     string fileName = Path.GetFileName(file);
@@ -3843,7 +4080,7 @@ namespace ESMSharp.TES3Terrain
                     }
                 }
             }
-
+            
             return null;
         }
     }

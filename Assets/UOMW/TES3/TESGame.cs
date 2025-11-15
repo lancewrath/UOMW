@@ -41,6 +41,8 @@ namespace ESMSharp.TES3
         private GameObject _playerObject = null;
         private List<GameObject> _playerObjects = new List<GameObject>(); // Store references to player objects before disabling
         private HashSet<string> _loadedCellKeys = new HashSet<string>();
+        private HashSet<string> _loadingCellKeys = new HashSet<string>(); // Cells currently being loaded
+        private Dictionary<string, Coroutine> _activeCellLoadingCoroutines = new Dictionary<string, Coroutine>(); // Track active loading coroutines per cell
         private int _currentPlayerCellX = int.MaxValue;
         private int _currentPlayerCellY = int.MaxValue;
         private Coroutine _cellLoadingCoroutine = null;
@@ -292,9 +294,39 @@ namespace ESMSharp.TES3
         /// <summary>
         /// Updates which cells are loaded around the player
         /// Prioritizes the player's current cell first, then neighbors
+        /// Stops ongoing neighbor loading when player moves to a new cell
         /// </summary>
         private IEnumerator UpdateLoadedCellsCoroutine(int centerCellX, int centerCellY)
         {
+            string newPlayerCellKey = $"{centerCellX}_{centerCellY}";
+            
+            // Stop any ongoing neighbor cell loading coroutines (but keep the player's current cell if it's loading)
+            List<string> cellsToStop = new List<string>();
+            foreach (var kvp in _activeCellLoadingCoroutines)
+            {
+                string cellKey = kvp.Key;
+                // Stop if it's not the new player cell and it's currently loading
+                if (cellKey != newPlayerCellKey && _loadingCellKeys.Contains(cellKey))
+                {
+                    cellsToStop.Add(cellKey);
+                }
+            }
+            
+            // Stop the coroutines
+            foreach (string cellKey in cellsToStop)
+            {
+                if (_activeCellLoadingCoroutines.TryGetValue(cellKey, out Coroutine coroutine))
+                {
+                    if (coroutine != null)
+                    {
+                        StopCoroutine(coroutine);
+                        Debug.Log($"TESGame: Stopped loading cell {cellKey} (player moved to new cell)");
+                    }
+                    _activeCellLoadingCoroutines.Remove(cellKey);
+                    _loadingCellKeys.Remove(cellKey);
+                }
+            }
+            
             HashSet<string> cellsToLoad = new HashSet<string>();
             HashSet<string> cellsToUnload = new HashSet<string>(_loadedCellKeys);
             
@@ -318,13 +350,27 @@ namespace ESMSharp.TES3
                 yield return null; // Yield between unloads
             }
             
-            // Priority 1: Load the player's current cell first
-            string playerCellKey = $"{centerCellX}_{centerCellY}";
-            if (cellsToLoad.Contains(playerCellKey) && !_loadedCellKeys.Contains(playerCellKey))
+            // Priority 1: Load the player's current cell first (or wait if already loading)
+            if (cellsToLoad.Contains(newPlayerCellKey) && !_loadedCellKeys.Contains(newPlayerCellKey))
             {
-                Debug.Log($"TESGame: Prioritizing player's current cell ({centerCellX}, {centerCellY})...");
-                yield return StartCoroutine(LoadCellCoroutine(playerCellKey));
-                cellsToLoad.Remove(playerCellKey); // Remove from list so we don't load it again
+                if (_loadingCellKeys.Contains(newPlayerCellKey))
+                {
+                    // Already loading, wait for it to complete
+                    Debug.Log($"TESGame: Player's current cell ({centerCellX}, {centerCellY}) is already loading, waiting...");
+                    while (_loadingCellKeys.Contains(newPlayerCellKey))
+                    {
+                        yield return null;
+                    }
+                }
+                else
+                {
+                    // Start loading the player's current cell
+                    Debug.Log($"TESGame: Prioritizing player's current cell ({centerCellX}, {centerCellY})...");
+                    Coroutine playerCellCoroutine = StartCoroutine(LoadCellCoroutine(newPlayerCellKey));
+                    _activeCellLoadingCoroutines[newPlayerCellKey] = playerCellCoroutine; // Store the coroutine reference
+                    yield return playerCellCoroutine; // Wait for it to complete
+                }
+                cellsToLoad.Remove(newPlayerCellKey); // Remove from list so we don't load it again
             }
             
             // Priority 2: Load neighboring cells (cells adjacent to player's cell)
@@ -337,26 +383,31 @@ namespace ESMSharp.TES3
                         continue; // Skip player's cell (already loaded)
                     
                     string cellKey = $"{x}_{y}";
-                    if (cellsToLoad.Contains(cellKey) && !_loadedCellKeys.Contains(cellKey))
+                    if (cellsToLoad.Contains(cellKey) && !_loadedCellKeys.Contains(cellKey) && !_loadingCellKeys.Contains(cellKey))
                     {
                         neighborCells.Add(cellKey);
                     }
                 }
             }
             
-            // Load immediate neighbors
+            // Load immediate neighbors (start them all, but don't wait - they'll run in parallel)
             foreach (string cellKey in neighborCells)
             {
-                yield return StartCoroutine(LoadCellCoroutine(cellKey));
+                Coroutine neighborCoroutine = StartCoroutine(LoadCellCoroutine(cellKey));
+                _activeCellLoadingCoroutines[cellKey] = neighborCoroutine; // Store the outer coroutine reference
                 cellsToLoad.Remove(cellKey);
             }
+            
+            // Wait a frame to let neighbor loading start
+            yield return null;
             
             // Priority 3: Load remaining cells (further away cells within radius)
             foreach (string cellKey in cellsToLoad)
             {
-                if (!_loadedCellKeys.Contains(cellKey))
+                if (!_loadedCellKeys.Contains(cellKey) && !_loadingCellKeys.Contains(cellKey))
                 {
-                    yield return StartCoroutine(LoadCellCoroutine(cellKey));
+                    Coroutine remainingCoroutine = StartCoroutine(LoadCellCoroutine(cellKey));
+                    _activeCellLoadingCoroutines[cellKey] = remainingCoroutine; // Store the outer coroutine reference
                 }
             }
         }
@@ -366,63 +417,90 @@ namespace ESMSharp.TES3
         /// </summary>
         private IEnumerator LoadCellCoroutine(string cellKey)
         {
-            if (_cellManager == null)
-            {
-                Debug.LogWarning($"TESGame: Cannot load cell {cellKey} - CellManager is null");
-                yield break;
-            }
+            // Mark as loading (coroutine reference is stored by caller)
+            _loadingCellKeys.Add(cellKey);
             
-            // Parse cell coordinates from key
-            string[] parts = cellKey.Split('_');
-            if (parts.Length != 2)
+            try
             {
-                Debug.LogWarning($"TESGame: Invalid cell key format: {cellKey}");
-                yield break;
+                if (_cellManager == null)
+                {
+                    Debug.LogWarning($"TESGame: Cannot load cell {cellKey} - CellManager is null");
+                    yield break;
+                }
+                
+                // Parse cell coordinates from key
+                string[] parts = cellKey.Split('_');
+                if (parts.Length != 2)
+                {
+                    Debug.LogWarning($"TESGame: Invalid cell key format: {cellKey}");
+                    yield break;
+                }
+                
+                if (!int.TryParse(parts[0], out int cellX) || !int.TryParse(parts[1], out int cellY))
+                {
+                    Debug.LogWarning($"TESGame: Failed to parse cell coordinates from key: {cellKey}");
+                    yield break;
+                }
+                
+                // Get the cell GameObject from CellManager
+                GameObject cellObj = _cellManager.GetCell(cellX, cellY);
+                if (cellObj == null)
+                {
+                    // Cell doesn't exist (might be outside world bounds or interior)
+                    Debug.Log($"TESGame: Cell ({cellX}, {cellY}) does not exist (may be outside world bounds or interior)");
+                    yield break;
+                }
+                
+                // Get TESCell component and generate statics if not already generated
+                TESCell tesCell = cellObj.GetComponent<TESCell>();
+                if (tesCell != null && !tesCell.staticsGenerated)
+                {
+                    Debug.Log($"TESGame: Loading statics for cell ({cellX}, {cellY})...");
+                    
+                    // Wait for statics to generate
+                    yield return StartCoroutine(tesCell.GenerateStatics());
+                    
+                    Debug.Log($"TESGame: Finished loading statics for cell ({cellX}, {cellY})");
+                }
+                else if (tesCell == null)
+                {
+                    Debug.LogWarning($"TESGame: Cell ({cellX}, {cellY}) does not have TESCell component!");
+                }
+                else if (tesCell.staticsGenerated)
+                {
+                    Debug.Log($"TESGame: Cell ({cellX}, {cellY}) statics already generated");
+                }
+                
+                // Mark as loaded
+                _loadedCellKeys.Add(cellKey);
+                _loadedCellCount = _loadedCellKeys.Count;
             }
-            
-            if (!int.TryParse(parts[0], out int cellX) || !int.TryParse(parts[1], out int cellY))
+            finally
             {
-                Debug.LogWarning($"TESGame: Failed to parse cell coordinates from key: {cellKey}");
-                yield break;
+                // Clean up loading state
+                _loadingCellKeys.Remove(cellKey);
+                _activeCellLoadingCoroutines.Remove(cellKey);
             }
-            
-            // Get the cell GameObject from CellManager
-            GameObject cellObj = _cellManager.GetCell(cellX, cellY);
-            if (cellObj == null)
-            {
-                // Cell doesn't exist (might be outside world bounds or interior)
-                Debug.Log($"TESGame: Cell ({cellX}, {cellY}) does not exist (may be outside world bounds or interior)");
-                yield break;
-            }
-            
-            // Get TESCell component and generate statics if not already generated
-            TESCell tesCell = cellObj.GetComponent<TESCell>();
-            if (tesCell != null && !tesCell.staticsGenerated)
-            {
-                Debug.Log($"TESGame: Loading statics for cell ({cellX}, {cellY})...");
-                yield return StartCoroutine(tesCell.GenerateStatics());
-                Debug.Log($"TESGame: Finished loading statics for cell ({cellX}, {cellY})");
-            }
-            else if (tesCell == null)
-            {
-                Debug.LogWarning($"TESGame: Cell ({cellX}, {cellY}) does not have TESCell component!");
-            }
-            else if (tesCell.staticsGenerated)
-            {
-                Debug.Log($"TESGame: Cell ({cellX}, {cellY}) statics already generated");
-            }
-            
-            // Mark as loaded
-            _loadedCellKeys.Add(cellKey);
-            _loadedCellCount = _loadedCellKeys.Count;
         }
         
         /// <summary>
         /// Unloads a cell (currently just marks it as unloaded, doesn't destroy it)
+        /// Also stops any ongoing loading coroutine for this cell
         /// Future: Could implement actual unloading/destruction of cell statics
         /// </summary>
         private void UnloadCell(string cellKey)
         {
+            // Stop any ongoing loading coroutine
+            if (_activeCellLoadingCoroutines.TryGetValue(cellKey, out Coroutine coroutine))
+            {
+                if (coroutine != null)
+                {
+                    StopCoroutine(coroutine);
+                }
+                _activeCellLoadingCoroutines.Remove(cellKey);
+            }
+            
+            _loadingCellKeys.Remove(cellKey);
             _loadedCellKeys.Remove(cellKey);
             _loadedCellCount = _loadedCellKeys.Count;
             // Note: We don't destroy the cell GameObject or its statics here

@@ -58,6 +58,38 @@ namespace ESMSharp.TES3
         /// </summary>
         /// <param name="dataFolder">Optional custom data folder path (defaults to StreamingAssets/Data)</param>
         /// <returns>Number of ESM files loaded</returns>
+        /// 
+        /// ESM Load Order and Record Stacking
+        /// ====================================
+        /// ESM files stack on top of each other - when generating terrain, we take all cells from all ESM files
+        /// to create one unified heightmap and terrain. Load order is CRITICAL because:
+        /// 
+        /// 1. Duplicate records: When multiple ESM files contain records with the same ID (e.g., same CELL, NPC, STAT),
+        ///    the record from the LATER ESM file (higher load order) REPLACES the one from earlier ESMs.
+        /// 
+        /// 2. Morrowind.ini load order: The [Game Files] section in Morrowind.ini (located in StreamingAssets/Data/)
+        ///    specifies the exact load order. This is now parsed by ParseMorrowindIniLoadOrder() to determine the
+        ///    correct order. The format is:
+        ///    [Game Files]
+        ///    GameFile0=Morrowind.esm
+        ///    GameFile1=Tribunal.esm
+        ///    GameFile2=Bloodmoon.esm
+        ///    etc.
+        /// 
+        /// 3. Modding support: This is how expansions and mods work - they can override existing content by
+        ///    providing replacement records with the same ID. For example, Bloodmoon.esm can modify cells from
+        ///    Morrowind.esm by providing updated CELL records with the same coordinates.
+        /// 
+        /// 4. Implementation: 
+        ///    - ParseMorrowindIniLoadOrder() parses Morrowind.ini [Game Files] section to get correct load order
+        ///    - ScanAndLoadESMs() sorts ESMs according to Morrowind.ini order (falls back to alphabetical if INI not found)
+        ///    - RebuildMergedRecords() processes ESMs in load order (later records overwrite earlier ones)
+        ///    - Terrain generation (GenerateHeightMap_MergedLands) uses the merged records correctly
+        /// 
+        /// 5. Record types affected: All record types are affected, but especially important for:
+        ///    - CELL records (terrain cells - later ESMs can modify terrain)
+        ///    - LAND records (heightmap data - later ESMs can override terrain heights)
+        ///    - STAT, CONT, NPC_, LIGH, etc. (game objects - later ESMs can replace or modify them)
         public static int ScanAndLoadESMs(string dataFolder = null)
         {
             if (string.IsNullOrEmpty(dataFolder))
@@ -81,14 +113,37 @@ namespace ESMSharp.TES3
                 return 0;
             }
             
-            // Sort by filename (load order is typically alphabetical, but can be customized)
-            Array.Sort(esmFiles, StringComparer.OrdinalIgnoreCase);
+            // Parse Morrowind.ini to get load order from [Game Files] section
+            List<string> loadOrder = ParseMorrowindIniLoadOrder(dataFolder);
             
-            // Load each ESM file
-            int loadedCount = 0;
-            for (int i = 0; i < esmFiles.Length; i++)
+            // Sort ESM files according to Morrowind.ini load order
+            List<(string path, int order)> esmFilesWithOrder = new List<(string, int)>();
+            foreach (string esmPath in esmFiles)
             {
-                string esmPath = esmFiles[i];
+                string esmFilename = Path.GetFileName(esmPath);
+                int order = loadOrder.IndexOf(esmFilename);
+                
+                if (order >= 0)
+                {
+                    // Found in Morrowind.ini - use that order
+                    esmFilesWithOrder.Add((esmPath, order));
+                }
+                else
+                {
+                    // Not in Morrowind.ini - add at end with high order number
+                    esmFilesWithOrder.Add((esmPath, int.MaxValue));
+                    Debug.LogWarning($"ESM file '{esmFilename}' not found in Morrowind.ini [Game Files] section. Loading after configured files.");
+                }
+            }
+            
+            // Sort by load order
+            esmFilesWithOrder.Sort((a, b) => a.order.CompareTo(b.order));
+            
+            // Load each ESM file in the correct order
+            int loadedCount = 0;
+            for (int i = 0; i < esmFilesWithOrder.Count; i++)
+            {
+                string esmPath = esmFilesWithOrder[i].path;
                 string esmFilename = Path.GetFileName(esmPath);
                 
                 if (LoadESM(esmFilename, esmPath, i))
@@ -184,6 +239,39 @@ namespace ESMSharp.TES3
                                 RecordLTex ltexrecord = new RecordLTex();
                                 ltexrecord.Deserialize(reader, name);
                                 mRecord = ltexrecord;
+                                
+                                // Register LTEX record with TESLTextureLibrary
+                                // Extract NAME, INTV, and DATA subrecords
+                                string ltexName = null;
+                                int ltexIndex = -1;
+                                string ltexFilename = null;
+                                
+                                foreach (SubRecords subrec in ltexrecord.subRecords)
+                                {
+                                    SubRecordLTexNAME nameSubrec = subrec as SubRecordLTexNAME;
+                                    if (nameSubrec != null)
+                                    {
+                                        ltexName = nameSubrec.name;
+                                    }
+                                    
+                                    SubRecordLTexINTV intvSubrec = subrec as SubRecordLTexINTV;
+                                    if (intvSubrec != null)
+                                    {
+                                        ltexIndex = intvSubrec.index;
+                                    }
+                                    
+                                    SubRecordLTexData dataSubrec = subrec as SubRecordLTexData;
+                                    if (dataSubrec != null)
+                                    {
+                                        ltexFilename = dataSubrec.filename;
+                                    }
+                                }
+                                
+                                // Register if we have at least an index
+                                if (ltexIndex >= 0)
+                                {
+                                    TESLTextureLibrary.RegisterLTEXRecord(ltexName, ltexIndex, ltexFilename, esmFilename);
+                                }
                                 break;
                                 
                             case "CELL":
@@ -323,6 +411,10 @@ namespace ESMSharp.TES3
         
         /// <summary>
         /// Rebuilds the merged records dictionary, applying load order (later records overwrite earlier ones)
+        /// 
+        /// NOTE: This function correctly implements ESM stacking - records from later ESMs (higher load order)
+        /// overwrite records from earlier ESMs with the same ID. This is how Morrowind modding works.
+        /// The load order is determined by the order in _loadedESMs, which should match Morrowind.ini [Game Files].
         /// </summary>
         private static void RebuildMergedRecords()
         {
@@ -360,6 +452,89 @@ namespace ESMSharp.TES3
             _allRecords = allRecordsList.ToArray();
             
             Debug.Log($"TESESMLibrary: Rebuilt merged records ({_allRecords.Length} total records, {_mergedRecords.Count} types)");
+        }
+        
+        /// <summary>
+        /// Parses Morrowind.ini file to extract ESM load order from [Game Files] section
+        /// </summary>
+        /// <param name="dataFolder">Path to the data folder containing Morrowind.ini</param>
+        /// <returns>List of ESM filenames in load order (GameFile0, GameFile1, etc.)</returns>
+        private static List<string> ParseMorrowindIniLoadOrder(string dataFolder)
+        {
+            List<string> loadOrder = new List<string>();
+            string iniPath = Path.Combine(dataFolder, "Morrowind.ini");
+            
+            if (!File.Exists(iniPath))
+            {
+                Debug.LogWarning($"Morrowind.ini not found at: {iniPath}. Using alphabetical load order.");
+                return loadOrder;
+            }
+            
+            try
+            {
+                bool inGameFilesSection = false;
+                Dictionary<int, string> gameFiles = new Dictionary<int, string>();
+                
+                using (StreamReader reader = new StreamReader(iniPath))
+                {
+                    string line;
+                    while ((line = reader.ReadLine()) != null)
+                    {
+                        // Trim whitespace and handle comments
+                        line = line.Trim();
+                        if (string.IsNullOrEmpty(line) || line.StartsWith(";") || line.StartsWith("#"))
+                            continue;
+                        
+                        // Check for section headers
+                        if (line.StartsWith("[") && line.EndsWith("]"))
+                        {
+                            string section = line.Substring(1, line.Length - 2).Trim();
+                            inGameFilesSection = string.Equals(section, "Game Files", StringComparison.OrdinalIgnoreCase);
+                            continue;
+                        }
+                        
+                        // Parse GameFile entries when in [Game Files] section
+                        if (inGameFilesSection && line.StartsWith("GameFile", StringComparison.OrdinalIgnoreCase))
+                        {
+                            int equalsIndex = line.IndexOf('=');
+                            if (equalsIndex > 0)
+                            {
+                                string key = line.Substring(0, equalsIndex).Trim();
+                                string value = line.Substring(equalsIndex + 1).Trim();
+                                
+                                // Extract number from "GameFile0", "GameFile1", etc.
+                                if (key.Length > 8) // "GameFile" is 8 characters
+                                {
+                                    string numberStr = key.Substring(8);
+                                    if (int.TryParse(numberStr, out int fileNumber) && !string.IsNullOrEmpty(value))
+                                    {
+                                        gameFiles[fileNumber] = value;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // Sort by file number and build ordered list
+                var sortedFiles = gameFiles.OrderBy(kvp => kvp.Key).Select(kvp => kvp.Value).ToList();
+                loadOrder.AddRange(sortedFiles);
+                
+                if (loadOrder.Count > 0)
+                {
+                    Debug.Log($"TESESMLibrary: Parsed Morrowind.ini - found {loadOrder.Count} ESM file(s) in load order: {string.Join(", ", loadOrder)}");
+                }
+                else
+                {
+                    Debug.LogWarning($"TESESMLibrary: Morrowind.ini [Game Files] section is empty or invalid. Using alphabetical load order.");
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"TESESMLibrary: Failed to parse Morrowind.ini: {ex.Message}. Using alphabetical load order.");
+            }
+            
+            return loadOrder;
         }
         
         /// <summary>

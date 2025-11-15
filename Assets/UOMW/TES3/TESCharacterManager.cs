@@ -67,7 +67,7 @@ namespace ESMSharp.TES3
         {
             public string BodyPartId { get; set; }         // Body part ID (from NAME)
             public string ModelFilename { get; set; }      // Model filename (from MODL)
-            public string PartName { get; set; }           // Part name (from FNAM)
+            public string RaceName { get; set; }           // Race name (from FNAM) - used to match body parts to NPCs
             public byte Part { get; set; }                 // Part index (from BYDT)
             public byte Vampire { get; set; }              // Vampire flag (from BYDT)
             public byte Flags { get; set; }                // Flags (from BYDT)
@@ -320,7 +320,14 @@ namespace ESMSharp.TES3
                     entry.ModelFilename = cleanedModel;
                 }
                 else if (subrec is SubRecordBodyFNAM fnam)
-                    entry.PartName = fnam.name;
+                {
+                    // FNAM contains the race name for body parts
+                    // Clean race name to remove null characters
+                    string cleanedRace = fnam.name?.TrimEnd('\0', ' ', '\t', '\r', '\n');
+                    cleanedRace = cleanedRace?.Replace("\0", "");
+                    cleanedRace = string.IsNullOrEmpty(cleanedRace) ? null : new string(cleanedRace.Where(c => c != '\0').ToArray()).Trim();
+                    entry.RaceName = cleanedRace;
+                }
                 else if (subrec is SubRecordBodyBYDT bydt)
                 {
                     entry.Part = bydt.part;

@@ -97,8 +97,8 @@ namespace ESMSharp.TES3
         /// </summary>
         public static bool LoadBSA(string bsaFilename, string bsaPath = null, string associatedESM = null)
         {
-            // Check if already loaded
-            string esmKey = associatedESM ?? Path.GetFileNameWithoutExtension(bsaFilename);
+            // Normalize the key to always be the filename without extension
+            string esmKey = Path.GetFileNameWithoutExtension(associatedESM ?? bsaFilename);
             if (_bsaArchives.ContainsKey(esmKey))
             {
                 Debug.LogWarning($"BSA file already loaded for ESM '{esmKey}': {bsaFilename}");
@@ -165,7 +165,11 @@ namespace ESMSharp.TES3
         public static BSAEntry GetBSAEntryForESM(string esmFilename)
         {
             string esmKey = Path.GetFileNameWithoutExtension(esmFilename);
-            _bsaArchives.TryGetValue(esmKey, out BSAEntry entry);
+            bool found = _bsaArchives.TryGetValue(esmKey, out BSAEntry entry);
+            if (!found)
+            {
+                Debug.LogWarning($"TESBSALibrary: No BSA entry found for ESM key '{esmKey}' (from '{esmFilename}'). Available keys: {string.Join(", ", _bsaArchives.Keys)}");
+            }
             return entry;
         }
         
@@ -178,26 +182,62 @@ namespace ESMSharp.TES3
         /// <returns>True if file was found and extracted, false otherwise</returns>
         public static bool ExtractFile(string fileName, string outputPath, string preferredESM = null)
         {
+            // Normalize path separators for comparison (HashSet is case-insensitive but path separators matter)
+            // Try both forward and backslash variations
+            string[] pathVariations = new[]
+            {
+                fileName,
+                fileName.Replace('/', '\\'),
+                fileName.Replace('\\', '/')
+            };
+            
             // Try preferred ESM first if specified
             if (!string.IsNullOrEmpty(preferredESM))
             {
                 BSAEntry entry = GetBSAEntryForESM(preferredESM);
-                if (entry != null && entry.IsLoaded && entry.FileNames.Contains(fileName))
+                if (entry != null && entry.IsLoaded)
                 {
-                    try
+                    string exactPath = null;
+                    foreach (string pathVar in pathVariations)
                     {
-                        BSAFileEntry fileEntry = entry.Archive.GetFileEntry(fileName);
-                        if (fileEntry != null)
+                        if (entry.FileNames.Contains(pathVar))
                         {
-                            byte[] data = entry.Archive.ExtractFile(fileEntry);
-                            Directory.CreateDirectory(Path.GetDirectoryName(outputPath));
-                            File.WriteAllBytes(outputPath, data);
-                            return true;
+                            exactPath = pathVar;
+                            break;
                         }
                     }
-                    catch (Exception ex)
+                    
+                    // If not found with variations, try case-insensitive filename match
+                    if (exactPath == null)
                     {
-                        Debug.LogWarning($"TESBSALibrary: Failed to extract '{fileName}' from '{entry.BSAFilename}': {ex.Message}");
+                        string baseFileName = Path.GetFileName(fileName);
+                        foreach (string bsaFileName in entry.FileNames)
+                        {
+                            if (Path.GetFileName(bsaFileName).Equals(baseFileName, StringComparison.OrdinalIgnoreCase))
+                            {
+                                exactPath = bsaFileName;
+                                break;
+                            }
+                        }
+                    }
+                    
+                    if (exactPath != null)
+                    {
+                        try
+                        {
+                            BSAFileEntry fileEntry = entry.Archive.GetFileEntry(exactPath);
+                            if (fileEntry != null)
+                            {
+                                byte[] data = entry.Archive.ExtractFile(fileEntry);
+                                Directory.CreateDirectory(Path.GetDirectoryName(outputPath));
+                                File.WriteAllBytes(outputPath, data);
+                                return true;
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Debug.LogWarning($"TESBSALibrary: Failed to extract '{exactPath}' from '{entry.BSAFilename}': {ex.Message}");
+                        }
                     }
                 }
             }
@@ -206,24 +246,60 @@ namespace ESMSharp.TES3
             var esmEntries = TESESMLibrary.GetLoadedESMEntries();
             foreach (var esmEntry in esmEntries)
             {
-                BSAEntry bsaEntry = GetBSAEntryForESM(esmEntry.ESMFilename);
-                if (bsaEntry != null && bsaEntry.IsLoaded && bsaEntry.FileNames.Contains(fileName))
+                // Skip preferred ESM if we already tried it
+                if (!string.IsNullOrEmpty(preferredESM))
                 {
-                    try
+                    string preferredESMName = Path.GetFileNameWithoutExtension(preferredESM);
+                    string currentESMName = Path.GetFileNameWithoutExtension(esmEntry.ESMFilename);
+                    if (string.Equals(preferredESMName, currentESMName, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                }
+                
+                BSAEntry bsaEntry = GetBSAEntryForESM(esmEntry.ESMFilename);
+                if (bsaEntry != null && bsaEntry.IsLoaded)
+                {
+                    string exactPath = null;
+                    foreach (string pathVar in pathVariations)
                     {
-                        BSAFileEntry fileEntry = bsaEntry.Archive.GetFileEntry(fileName);
-                        if (fileEntry != null)
+                        if (bsaEntry.FileNames.Contains(pathVar))
                         {
-                            byte[] data = bsaEntry.Archive.ExtractFile(fileEntry);
-                            Directory.CreateDirectory(Path.GetDirectoryName(outputPath));
-                            File.WriteAllBytes(outputPath, data);
-                            Debug.Log($"TESBSALibrary: Extracted '{fileName}' from '{bsaEntry.BSAFilename}'");
-                            return true;
+                            exactPath = pathVar;
+                            break;
                         }
                     }
-                    catch (Exception ex)
+                    
+                    // If not found with variations, try case-insensitive filename match
+                    if (exactPath == null)
                     {
-                        Debug.LogWarning($"TESBSALibrary: Failed to extract '{fileName}' from '{bsaEntry.BSAFilename}': {ex.Message}");
+                        string baseFileName = Path.GetFileName(fileName);
+                        foreach (string bsaFileName in bsaEntry.FileNames)
+                        {
+                            if (Path.GetFileName(bsaFileName).Equals(baseFileName, StringComparison.OrdinalIgnoreCase))
+                            {
+                                exactPath = bsaFileName;
+                                break;
+                            }
+                        }
+                    }
+                    
+                    if (exactPath != null)
+                    {
+                        try
+                        {
+                            BSAFileEntry fileEntry = bsaEntry.Archive.GetFileEntry(exactPath);
+                            if (fileEntry != null)
+                            {
+                                byte[] data = bsaEntry.Archive.ExtractFile(fileEntry);
+                                Directory.CreateDirectory(Path.GetDirectoryName(outputPath));
+                                File.WriteAllBytes(outputPath, data);
+                                Debug.Log($"TESBSALibrary: Extracted '{exactPath}' from '{bsaEntry.BSAFilename}'");
+                                return true;
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Debug.LogWarning($"TESBSALibrary: Failed to extract '{exactPath}' from '{bsaEntry.BSAFilename}': {ex.Message}");
+                        }
                     }
                 }
             }
@@ -236,22 +312,65 @@ namespace ESMSharp.TES3
         /// </summary>
         public static bool FileExists(string fileName, string preferredESM = null)
         {
+            // Normalize path separators for comparison (HashSet is case-insensitive but path separators matter)
+            // Try both forward and backslash variations
+            string[] pathVariations = new[]
+            {
+                fileName,
+                fileName.Replace('/', '\\'),
+                fileName.Replace('\\', '/')
+            };
+            
             // Try preferred ESM first if specified
             if (!string.IsNullOrEmpty(preferredESM))
             {
                 BSAEntry entry = GetBSAEntryForESM(preferredESM);
-                if (entry != null && entry.IsLoaded && entry.FileNames.Contains(fileName))
+                if (entry != null && entry.IsLoaded)
                 {
-                    return true;
+                    // Try path variations
+                    foreach (string pathVar in pathVariations)
+                    {
+                        if (entry.FileNames.Contains(pathVar))
+                        {
+                            return true;
+                        }
+                    }
+                    
+                    // If not found with variations, try case-insensitive filename match
+                    string baseFileName = Path.GetFileName(fileName);
+                    foreach (string bsaFileName in entry.FileNames)
+                    {
+                        if (Path.GetFileName(bsaFileName).Equals(baseFileName, StringComparison.OrdinalIgnoreCase))
+                        {
+                            return true;
+                        }
+                    }
                 }
             }
             
             // Check all BSAs
             foreach (var entry in _bsaArchives.Values)
             {
-                if (entry.IsLoaded && entry.FileNames.Contains(fileName))
+                if (entry.IsLoaded)
                 {
-                    return true;
+                    // Try path variations
+                    foreach (string pathVar in pathVariations)
+                    {
+                        if (entry.FileNames.Contains(pathVar))
+                        {
+                            return true;
+                        }
+                    }
+                    
+                    // If not found with variations, try case-insensitive filename match
+                    string baseFileName = Path.GetFileName(fileName);
+                    foreach (string bsaFileName in entry.FileNames)
+                    {
+                        if (Path.GetFileName(bsaFileName).Equals(baseFileName, StringComparison.OrdinalIgnoreCase))
+                        {
+                            return true;
+                        }
+                    }
                 }
             }
             

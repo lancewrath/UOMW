@@ -495,31 +495,69 @@ namespace ESMSharp.NIF
 
             string baseFilename = System.IO.Path.GetFileName(texturePath);
             string baseNameNoExt = System.IO.Path.GetFileNameWithoutExtension(baseFilename);
-            string textureDir = System.IO.Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Textures", esm);
-
-            // Try to find texture in cache (prefer PNG, then DDS, then original format)
+            
+            // Check all ESM cache directories (not just the one passed in)
+            string[] loadedESMs = TESESMLibrary.GetLoadedESMFilenames();
+            string foundTexturePath = null;
+            
+            // Try to find texture in cache across all ESM cache directories
             string[] extensions = new[] { ".png", ".dds", ".tga" };
             string originalExt = System.IO.Path.GetExtension(baseFilename);
             if (!string.IsNullOrEmpty(originalExt) && !extensions.Contains(originalExt.ToLower()))
             {
                 extensions = new[] { originalExt.ToLower() }.Concat(extensions).ToArray();
             }
-
-            string foundTexturePath = null;
-            foreach (string ext in extensions)
+            
+            // Try preferred ESM first if specified
+            if (!string.IsNullOrEmpty(esm))
             {
-                string testPath = System.IO.Path.Combine(textureDir, baseNameNoExt + ext);
-                if (File.Exists(testPath))
+                string preferredTextureDir = System.IO.Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Textures", esm);
+                foreach (string ext in extensions)
                 {
-                    foundTexturePath = testPath;
-                    break;
+                    string testPath = System.IO.Path.Combine(preferredTextureDir, baseNameNoExt + ext);
+                    if (File.Exists(testPath))
+                    {
+                        foundTexturePath = testPath;
+                        break;
+                    }
+                }
+            }
+            
+            // Check all other ESM cache directories if not found
+            if (foundTexturePath == null)
+            {
+                foreach (string esmFilename in loadedESMs)
+                {
+                    string esmName = System.IO.Path.GetFileNameWithoutExtension(esmFilename);
+                    // Skip if we already checked this one
+                    if (!string.IsNullOrEmpty(esm) && string.Equals(esmName, esm, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    
+                    string textureDir = System.IO.Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Textures", esmName);
+                    foreach (string ext in extensions)
+                    {
+                        string testPath = System.IO.Path.Combine(textureDir, baseNameNoExt + ext);
+                        if (File.Exists(testPath))
+                        {
+                            foundTexturePath = testPath;
+                            break;
+                        }
+                    }
+                    if (foundTexturePath != null) break;
                 }
             }
 
             // If not found in cache, try to extract from BSA
             if (foundTexturePath == null)
             {
-                foundTexturePath = ExtractTextureFromBSA(texturePath, textureDir, esm);
+                // Use preferred ESM's cache directory for extraction, or first loaded ESM
+                string preferredESM = esm;
+                if (string.IsNullOrEmpty(preferredESM) && loadedESMs.Length > 0)
+                {
+                    preferredESM = System.IO.Path.GetFileNameWithoutExtension(loadedESMs[0]);
+                }
+                string textureDir = System.IO.Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Textures", preferredESM ?? "Morrowind");
+                foundTexturePath = ExtractTextureFromBSA(texturePath, textureDir, preferredESM);
             }
 
             if (foundTexturePath != null)
@@ -560,31 +598,13 @@ namespace ESMSharp.NIF
         }
 
         /// <summary>
-        /// Extracts a texture from BSA archive
+        /// Extracts a texture from BSA archives (searches all BSAs using TESBSALibrary)
         /// </summary>
         private string ExtractTextureFromBSA(string texturePath, string outputDir, string esm)
         {
-            if (_bsaArchive == null)
-            {
-                string bsaPath = System.IO.Path.Combine(Application.dataPath, "StreamingAssets", "Data", _bsa);
-                if (!File.Exists(bsaPath))
-                {
-                    //UnityEngine.Debug.LogWarning($"BSA file not found: {bsaPath}");
-                    return null;
-                }
-
-                try
-                {
-                    _bsaArchive = new BSA();
-                    _bsaArchive.Open(bsaPath);
-                }
-                catch (Exception ex)
-                {
-                    UnityEngine.Debug.LogError($"Failed to open BSA archive: {ex.Message}");
-                    return null;
-                }
-            }
-
+            // Use TESBSALibrary to search across all BSAs (same approach as model extraction)
+            HashSet<string> allBSAFiles = TESBSALibrary.GetAllFileNames();
+            
             // Normalize the texture path first
             string normalizedPath = NormalizeTexturePath(texturePath);
             
@@ -623,31 +643,39 @@ namespace ESMSharp.NIF
                 pathVariations.Add("textures/" + ddsPath);
             }
             
-            string[] pathVariationsArray = pathVariations.ToArray();
-
-            HashSet<string> bsaFileNames = new HashSet<string>(_bsaArchive.GetFileNames(), StringComparer.OrdinalIgnoreCase);
             string foundPath = null;
 
-            //UnityEngine.Debug.Log($"Searching BSA for texture: {texturePath} (normalized: {normalizedPath}, trying {pathVariationsArray.Length} variations)");
-            foreach (string pathVar in pathVariationsArray)
+            // Search in HashSet first (faster, case-insensitive)
+            foreach (string pathVar in pathVariations)
             {
-                if (bsaFileNames.Contains(pathVar))
+                if (allBSAFiles.Contains(pathVar))
                 {
                     foundPath = pathVar;
-                    //UnityEngine.Debug.Log($"Found texture in BSA: {foundPath}");
                     break;
                 }
             }
 
-            // Case-insensitive fallback
+            // Case-insensitive fallback - search by filename
             if (foundPath == null)
             {
-                string textureLower = texturePath.ToLower();
-                foreach (string bsaFileName in bsaFileNames)
+                foreach (string bsaFileName in allBSAFiles)
                 {
-                    if (bsaFileName.ToLower().EndsWith("\\" + textureLower) ||
-                        bsaFileName.ToLower().EndsWith("/" + textureLower) ||
-                        bsaFileName.ToLower() == textureLower)
+                    string bsaBaseName = System.IO.Path.GetFileName(bsaFileName);
+                    if (bsaBaseName.Equals(normalizedBaseFilename, StringComparison.OrdinalIgnoreCase))
+                    {
+                        foundPath = bsaFileName;
+                        break;
+                    }
+                }
+            }
+            
+            // If still not found, try partial match (filename might have different extension)
+            if (foundPath == null)
+            {
+                foreach (string bsaFileName in allBSAFiles)
+                {
+                    string bsaBaseNameNoExt = System.IO.Path.GetFileNameWithoutExtension(bsaFileName);
+                    if (bsaBaseNameNoExt.Equals(normalizedBaseNameNoExt, StringComparison.OrdinalIgnoreCase))
                     {
                         foundPath = bsaFileName;
                         break;
@@ -657,54 +685,155 @@ namespace ESMSharp.NIF
 
             if (foundPath != null)
             {
-                try
+                // Determine which ESM's BSA contains this file
+                var esmEntries = TESESMLibrary.GetLoadedESMEntries();
+                string sourceESM = null;
+                string exactBSAPath = foundPath; // Use the found path as default
+                
+                // Try path variations to find the exact path format in the BSA
+                string[] bsaPathVariations = new[]
                 {
-                    BSAFileEntry entry = _bsaArchive.GetFileEntry(foundPath);
-                    if (entry != null)
+                    foundPath,
+                    foundPath.Replace('/', '\\'),
+                    foundPath.Replace('\\', '/')
+                };
+                
+                foreach (var esmEntry in esmEntries)
+                {
+                    var bsaEntry = TESBSALibrary.GetBSAEntryForESM(esmEntry.ESMFilename);
+                    if (bsaEntry != null && bsaEntry.IsLoaded)
                     {
-                        byte[] textureData = _bsaArchive.ExtractFile(entry);
-                        string outputBaseFilename = System.IO.Path.GetFileName(texturePath);
-                        string outputBaseNameNoExt = System.IO.Path.GetFileNameWithoutExtension(outputBaseFilename);
-                        string outputPath = System.IO.Path.Combine(outputDir, outputBaseNameNoExt + System.IO.Path.GetExtension(foundPath).ToLower());
-
-                        File.WriteAllBytes(outputPath, textureData);
-                        //UnityEngine.Debug.Log($"Extracted texture from BSA: {foundPath} -> {outputPath}");
-
-                        // If it's a DDS, try to convert to PNG
-                        if (outputPath.ToLower().EndsWith(".dds"))
+                        // Try path variations
+                        foreach (string pathVar in bsaPathVariations)
                         {
-                            string pngPath = System.IO.Path.ChangeExtension(outputPath, ".png");
-                            if (ConvertDDSToPNG(textureData, pngPath))
+                            if (bsaEntry.FileNames.Contains(pathVar))
                             {
-                                //UnityEngine.Debug.Log($"Converted DDS to PNG: {outputPath} -> {pngPath}");
-                                return pngPath; // Return PNG path instead
+                                exactBSAPath = pathVar;
+                                sourceESM = System.IO.Path.GetFileNameWithoutExtension(esmEntry.ESMFilename);
+                                break;
                             }
                         }
-                        else if (outputPath.ToLower().EndsWith(".tga"))
+                        
+                        if (!string.IsNullOrEmpty(sourceESM)) break;
+                        
+                        // If not found with path variations, try filename-only match
+                        string foundBaseFilename = System.IO.Path.GetFileName(foundPath);
+                        foreach (string bsaFileName in bsaEntry.FileNames)
                         {
-                            // Convert TGA to PNG
-                            string pngPath = System.IO.Path.ChangeExtension(outputPath, ".png");
-                            Texture2D tempTexture = new Texture2D(2, 2);
-                            if (tempTexture.LoadImage(textureData))
+                            if (System.IO.Path.GetFileName(bsaFileName).Equals(foundBaseFilename, StringComparison.OrdinalIgnoreCase))
                             {
-                                byte[] pngData = tempTexture.EncodeToPNG();
-                                System.IO.File.WriteAllBytes(pngPath, pngData);
-                                UnityEngine.Object.DestroyImmediate(tempTexture);
+                                exactBSAPath = bsaFileName;
+                                sourceESM = System.IO.Path.GetFileNameWithoutExtension(esmEntry.ESMFilename);
+                                break;
+                            }
+                        }
+                        
+                        if (!string.IsNullOrEmpty(sourceESM)) break;
+                    }
+                }
+                
+                // If we couldn't determine source ESM, use the provided esm parameter or first loaded
+                if (string.IsNullOrEmpty(sourceESM))
+                {
+                    sourceESM = esm;
+                    if (string.IsNullOrEmpty(sourceESM) && esmEntries.Length > 0)
+                    {
+                        sourceESM = System.IO.Path.GetFileNameWithoutExtension(esmEntries[0].ESMFilename);
+                    }
+                }
+                
+                // Extract to the correct ESM cache directory
+                string targetCacheDir = System.IO.Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Textures", sourceESM);
+                System.IO.Directory.CreateDirectory(targetCacheDir);
+                
+                // Determine output filename based on actual BSA file extension
+                string actualExt = System.IO.Path.GetExtension(exactBSAPath).ToLower();
+                if (string.IsNullOrEmpty(actualExt))
+                {
+                    actualExt = System.IO.Path.GetExtension(foundPath).ToLower();
+                }
+                string outputPath = System.IO.Path.Combine(targetCacheDir, normalizedBaseNameNoExt + actualExt);
+                
+                // Use TESBSALibrary to extract with the exact BSA path
+                // Try preferred ESM first, then all others
+                bool extractSuccess = false;
+                if (!string.IsNullOrEmpty(sourceESM))
+                {
+                    extractSuccess = TESBSALibrary.ExtractFile(exactBSAPath, outputPath, sourceESM + ".esm");
+                }
+                
+                // If that failed, try without preferred ESM (searches all BSAs)
+                if (!extractSuccess)
+                {
+                    extractSuccess = TESBSALibrary.ExtractFile(exactBSAPath, outputPath, null);
+                }
+                
+                if (extractSuccess)
+                {
+                    // If it's a DDS, try to convert to PNG
+                    if (actualExt == ".dds")
+                    {
+                        try
+                        {
+                            byte[] ddsData = System.IO.File.ReadAllBytes(outputPath);
+                            string pngPath = System.IO.Path.ChangeExtension(outputPath, ".png");
+                            if (ConvertDDSToPNG(ddsData, pngPath))
+                            {
                                 #if UNITY_EDITOR
                                 SetTextureImportSettings(pngPath);
                                 #endif
-                                //UnityEngine.Debug.Log($"Converted TGA to PNG: {outputPath} -> {pngPath}");
+                                //UnityEngine.Debug.Log($"Extracted and converted DDS to PNG: {foundPath} -> {System.IO.Path.GetFileName(pngPath)} (from {sourceESM})");
+                                return pngPath; // Return PNG path instead
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            UnityEngine.Debug.LogWarning($"Error converting extracted DDS to PNG: {ex.Message}");
+                        }
+                    }
+                    else if (actualExt == ".tga")
+                    {
+                        try
+                        {
+                            // Convert TGA to PNG
+                            byte[] tgaData = System.IO.File.ReadAllBytes(outputPath);
+                            string pngPath = System.IO.Path.ChangeExtension(outputPath, ".png");
+                            Texture2D tempTexture = new Texture2D(2, 2);
+                            if (tempTexture.LoadImage(tgaData))
+                            {
+                                Texture2D rgbaTexture = new Texture2D(tempTexture.width, tempTexture.height, TextureFormat.RGBA32, false);
+                                Color32[] pixels = tempTexture.GetPixels32();
+                                for (int i = 0; i < pixels.Length; i++)
+                                {
+                                    pixels[i].a = 255;
+                                }
+                                rgbaTexture.SetPixels32(pixels);
+                                rgbaTexture.Apply();
+                                
+                                byte[] pngData = rgbaTexture.EncodeToPNG();
+                                System.IO.File.WriteAllBytes(pngPath, pngData);
+                                UnityEngine.Object.DestroyImmediate(tempTexture);
+                                UnityEngine.Object.DestroyImmediate(rgbaTexture);
+                                #if UNITY_EDITOR
+                                SetTextureImportSettings(pngPath);
+                                #endif
+                                //UnityEngine.Debug.Log($"Extracted and converted TGA to PNG: {foundPath} -> {System.IO.Path.GetFileName(pngPath)} (from {sourceESM})");
                                 return pngPath; // Return PNG path instead
                             }
                             UnityEngine.Object.DestroyImmediate(tempTexture);
                         }
-
-                        return outputPath;
+                        catch (Exception ex)
+                        {
+                            UnityEngine.Debug.LogWarning($"Error converting extracted TGA to PNG: {ex.Message}");
+                        }
                     }
+                    
+                    //UnityEngine.Debug.Log($"Extracted texture from BSA: {foundPath} -> {System.IO.Path.GetFileName(outputPath)} (from {sourceESM})");
+                    return outputPath;
                 }
-                catch (Exception ex)
+                else
                 {
-                    UnityEngine.Debug.LogError($"Error extracting texture {foundPath}: {ex.Message}");
+                    UnityEngine.Debug.LogWarning($"Failed to extract texture '{foundPath}' from BSA archives");
                 }
             }
 
