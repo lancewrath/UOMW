@@ -147,7 +147,14 @@ namespace Niflib
 				this.HasBoundingBox = reader.ReadBoolean(Version);
 				if (this.HasBoundingBox)
 				{
-					throw new Exception("Cannot read BoundingBoxes yet");
+					// BoundingBox structure: uint (4) + Vector3 (12) + Matrix33 (36) + Vector3 (12) = 64 bytes
+					// Skip the bounding box data instead of throwing an exception
+					// This allows skeleton files to load even if they have bounding boxes
+					reader.ReadUInt32(); // unknownInt (usually 1)
+					reader.ReadVector3(); // translation
+					reader.ReadMatrix33(); // rotation
+					reader.ReadVector3(); // radius
+					// UnityEngine.Debug.LogWarning("NiAVObject: Skipped BoundingBox data (64 bytes) - not yet fully supported");
 				}
 			}
 			if (this.File.Header.Version >= eNifVersion.VER_10_0_1_0)

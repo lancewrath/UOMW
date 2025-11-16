@@ -277,7 +277,26 @@ namespace ESMSharp.NIF
         /// </summary>
         internal GameObject LoadNIFFromBytes(byte[] nifData, string filename, bool combineMeshes = false, bool isTreeOrGrass = false)
         {
-            // Use niflib.net (primary loader)
+            // Check if this is a skeleton file (base_anim.nif, etc.)
+            // Skeleton files need special handling to create bone hierarchy
+            bool isSkeletonFile = filename.Contains("base_anim", StringComparison.OrdinalIgnoreCase) ||
+                                   filename.Contains("baseanim", StringComparison.OrdinalIgnoreCase) ||
+                                   filename.Contains("skeleton", StringComparison.OrdinalIgnoreCase);
+            
+            if (isSkeletonFile)
+            {
+                try
+                {
+                    return LoadSkeletonFromBytesNiflib(nifData, filename);
+                }
+                catch (System.Exception ex)
+                {
+                    UnityEngine.Debug.LogError($"Failed to load skeleton file {filename}: {ex.Message}\n{ex.StackTrace}");
+                    return null;
+                }
+            }
+            
+            // Use niflib.net (primary loader) for regular files
             // No fallback - if niflib.net fails, we want to see the error and fix it
             try
             {
@@ -1256,6 +1275,132 @@ namespace ESMSharp.NIF
                 
                 //UnityEngine.Debug.Log($"Created NIF model (niflib.net): {filename} with {renderMeshesList.Count} render mesh(es) and {collisionMeshesList.Count} collision mesh(es)");
                 return rootObj;
+            }
+        }
+        
+        /// <summary>
+        /// Loads a skeleton NIF file and creates GameObjects for bones (NiNode hierarchy) and meshes
+        /// This is specialized for skeleton files like base_anim.nif which contain bone hierarchies
+        /// </summary>
+        private GameObject LoadSkeletonFromBytesNiflib(byte[] nifData, string filename)
+        {
+            using (MemoryStream stream = new MemoryStream(nifData))
+            using (BinaryReader reader = new BinaryReader(stream))
+            {
+                // Parse NIF file using niflib.net
+                Niflib.NiFile nifFile = new Niflib.NiFile(reader);
+                
+                // Create root GameObject for skeleton
+                GameObject skeletonRoot = new GameObject(System.IO.Path.GetFileNameWithoutExtension(filename));
+                skeletonRoot.transform.rotation = Quaternion.identity;
+                
+                // Skeleton files are in Morrowind units, same as static objects
+                // Scale will be applied by the caller (PlaceStatics.cs)
+                skeletonRoot.transform.localScale = Vector3.one;
+                
+                // Process all root nodes and create bone hierarchy
+                foreach (var rootRef in nifFile.Footer.RootNodes)
+                {
+                    if (!rootRef.IsValid() || rootRef.Object == null)
+                        continue;
+                    
+                    var rootNode = rootRef.Object as Niflib.NiNode;
+                    if (rootNode == null)
+                        continue;
+                    
+                    // Create bone hierarchy from NiNode tree
+                    // This creates GameObjects for each NiNode (bone) with proper transforms
+                    // Pass null as parentWorldTransform to indicate this is the root (will be handled in CreateBoneHierarchy)
+                    CreateBoneHierarchy(rootNode, skeletonRoot.transform, null);
+                }
+                
+                return skeletonRoot;
+            }
+        }
+        
+        /// <summary>
+        /// Recursively creates GameObjects for NiNode bones and processes meshes
+        /// </summary>
+        private void CreateBoneHierarchy(Niflib.NiNode node, Transform parentTransform, Matrix4x4? parentWorldTransform)
+        {
+            if (node == null)
+                return;
+            
+            // Get node name (bone name)
+            string nodeName = node.Name != null ? node.Name.Value : "UnnamedBone";
+            
+            // Create GameObject for this bone
+            GameObject boneObj = new GameObject(nodeName);
+            boneObj.transform.SetParent(parentTransform, false);
+            
+            // Extract transform components directly from NiAVObject (not from matrix)
+            // This ensures we get the correct local transform relative to parent
+            Vector3 morrowindTranslation = node.Translation;
+            Matrix4x4 morrowindRotation = (Matrix4x4)node.Rotation;
+            float morrowindScale = node.Scale;
+            
+            // Convert Morrowind coordinate system to Unity
+            // Morrowind: +X East, +Y Up, +Z North (right-handed)
+            // Unity: +X East, +Y Up, +Z South (left-handed)
+            // Rotation: Negate Y and Z axes (convert right-handed to left-handed)
+            // Translation: Negate Z coordinate
+            
+            // Convert translation: negate Z
+            Vector3 unityTranslation = new Vector3(
+                morrowindTranslation.x,
+                morrowindTranslation.y,
+                -morrowindTranslation.z
+            );
+            
+            // Convert rotation matrix: negate Y and Z columns (right-handed to left-handed)
+            Matrix4x4 unityRotationMatrix = new Matrix4x4(
+                new Vector4(morrowindRotation.m00, morrowindRotation.m01, -morrowindRotation.m02, 0),
+                new Vector4(morrowindRotation.m10, morrowindRotation.m11, -morrowindRotation.m12, 0),
+                new Vector4(-morrowindRotation.m20, -morrowindRotation.m21, morrowindRotation.m22, 0),
+                new Vector4(0, 0, 0, 1)
+            );
+            
+            // Extract quaternion from rotation matrix
+            Quaternion unityRotation = unityRotationMatrix.rotation;
+            
+            // Scale is uniform (single float in NIF)
+            Vector3 unityScale = new Vector3(morrowindScale, morrowindScale, morrowindScale);
+            
+            // Check if this is the root node (parentWorldTransform is null)
+            // Root node typically has identity transform, but we should still apply it if it has one
+            bool isRootNode = !parentWorldTransform.HasValue;
+            
+            // Always apply the transform - even root nodes should have their transforms applied
+            // (though root nodes in skeleton files typically have identity transforms)
+            boneObj.transform.localPosition = unityTranslation;
+            boneObj.transform.localRotation = unityRotation;
+            boneObj.transform.localScale = unityScale;
+            
+            // Build transform matrix for world space calculations (for children)
+            Matrix4x4 nodeLocalTransform = Matrix4x4.TRS(unityTranslation, unityRotation, unityScale);
+            Matrix4x4 nodeWorldTransform = isRootNode
+                ? nodeLocalTransform
+                : parentWorldTransform.Value * nodeLocalTransform;
+            
+            // Process children (both NiNode bones and NiTriShape meshes)
+            if (node.Children != null)
+            {
+                foreach (var childRef in node.Children)
+                {
+                    if (!childRef.IsValid() || childRef.Object == null)
+                        continue;
+                    
+                    var childNode = childRef.Object as Niflib.NiNode;
+                    if (childNode != null)
+                    {
+                        // Recursively create bone hierarchy, passing the world transform
+                        CreateBoneHierarchy(childNode, boneObj.transform, nodeWorldTransform);
+                    }
+                    
+                    // Note: We skip NiTriShape meshes for skeleton files
+                    // Skeleton bones typically don't have visible meshes, just transforms
+                    // If a bone has a mesh, it's usually a collision helper or debug visualization
+                }
             }
         }
         

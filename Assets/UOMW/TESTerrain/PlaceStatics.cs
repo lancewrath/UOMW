@@ -2652,6 +2652,120 @@ namespace ESMSharp.TES3Terrain
         }
 
         /// <summary>
+        /// Tries to extract a NIF file from BSA archives using a full path (e.g., "meshes/base_anim.nif")
+        /// This is used for skeleton files that need the "meshes/" prefix
+        /// Also tries variations with/without underscores (base_anim vs baseanim)
+        /// </summary>
+        private string TryExtractFromBSAWithPath(string fullPath)
+        {
+            try
+            {
+                // Normalize path separators
+                string normalizedPath = fullPath.Replace('\\', '/');
+                
+                // Build path variations to search for (with different case, separators, and underscore variations)
+                List<string> pathVariations = new List<string>
+                {
+                    normalizedPath,
+                    normalizedPath.Replace('/', '\\'),
+                    normalizedPath.ToLowerInvariant(),
+                    normalizedPath.ToUpperInvariant()
+                };
+                
+                // For skeleton files, try both with and without underscores
+                // Morrowind uses base_anim.nif but some mods might use baseanim.nif
+                if (normalizedPath.Contains("base_anim") || normalizedPath.Contains("baseanim"))
+                {
+                    string underscoreVariation = normalizedPath.Replace("base_anim", "baseanim");
+                    string noUnderscoreVariation = normalizedPath.Replace("baseanim", "base_anim");
+                    
+                    pathVariations.Add(underscoreVariation);
+                    pathVariations.Add(underscoreVariation.Replace('/', '\\'));
+                    pathVariations.Add(underscoreVariation.ToLowerInvariant());
+                    
+                    pathVariations.Add(noUnderscoreVariation);
+                    pathVariations.Add(noUnderscoreVariation.Replace('/', '\\'));
+                    pathVariations.Add(noUnderscoreVariation.ToLowerInvariant());
+                }
+                
+                // Get all file names from all BSAs
+                HashSet<string> allBSAFiles = TESBSALibrary.GetAllFileNames();
+                
+                // Try to find the model with various path variations
+                string foundPath = null;
+                foreach (string pathVar in pathVariations)
+                {
+                    if (allBSAFiles.Contains(pathVar))
+                    {
+                        foundPath = pathVar;
+                        break;
+                    }
+                }
+                
+                // Case-insensitive fallback
+                if (foundPath == null)
+                {
+                    string normalizedPathLower = normalizedPath.ToLowerInvariant();
+                    foreach (string bsaFileName in allBSAFiles)
+                    {
+                        if (bsaFileName.ToLowerInvariant() == normalizedPathLower ||
+                            bsaFileName.ToLowerInvariant().Replace('\\', '/') == normalizedPathLower)
+                        {
+                            foundPath = bsaFileName;
+                            break;
+                        }
+                    }
+                }
+                
+                if (foundPath != null)
+                {
+                    // Find which ESM's BSA contains this file (search in load order)
+                    var esmEntries = TESESMLibrary.GetLoadedESMEntries();
+                    string sourceESM = null;
+                    
+                    foreach (var esmEntry in esmEntries)
+                    {
+                        var bsaEntry = TESBSALibrary.GetBSAEntryForESM(esmEntry.ESMFilename);
+                        if (bsaEntry != null && bsaEntry.IsLoaded && bsaEntry.FileNames.Contains(foundPath))
+                        {
+                            sourceESM = Path.GetFileNameWithoutExtension(esmEntry.ESMFilename);
+                            break;
+                        }
+                    }
+                    
+                    // If we couldn't determine source ESM, use preferred ESM or first loaded
+                    if (string.IsNullOrEmpty(sourceESM))
+                    {
+                        sourceESM = Path.GetFileNameWithoutExtension(_esm);
+                        if (string.IsNullOrEmpty(sourceESM) && esmEntries.Length > 0)
+                        {
+                            sourceESM = Path.GetFileNameWithoutExtension(esmEntries[0].ESMFilename);
+                        }
+                    }
+                    
+                    // Extract to cache using TESBSALibrary
+                    string outputFilename = Path.GetFileName(foundPath);
+                    string cacheDir = Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Models", sourceESM);
+                    Directory.CreateDirectory(cacheDir);
+                    string outputPath = Path.Combine(cacheDir, outputFilename);
+                    
+                    // Use TESBSALibrary to extract (it will find the correct BSA)
+                    if (TESBSALibrary.ExtractFile(foundPath, outputPath))
+                    {
+                        UnityEngine.Debug.Log($"Extracted skeleton from BSA: {foundPath} -> {outputFilename} (ESM: {sourceESM})");
+                        return outputFilename;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                UnityEngine.Debug.LogError($"Error extracting skeleton from BSA for path '{fullPath}': {ex.Message}");
+            }
+            
+            return null;
+        }
+        
+        /// <summary>
         /// Tries to extract a NIF file from BSA archives using TESBSALibrary (supports multiple BSAs)
         /// Searches all loaded BSAs in load order and extracts to the appropriate ESM cache directory
         /// </summary>
@@ -3329,12 +3443,36 @@ namespace ESMSharp.TES3Terrain
             
             try
             {
-                // Attach skeleton if loaded
+                // Process skeleton if loaded
+                Transform headBoneTransform = null;
                 if (skeletonModel != null)
                 {
+                    // Scale skeleton to match NPC scale
+                    // Skeleton NIF files are in Morrowind units, same as static objects, so use MORROWIND_TO_STATIC_SCALE
+                    // Then apply the NPC's individual scale multiplier
+                    Vector3 skeletonBaseScale = new Vector3(TESGlobals.MORROWIND_TO_STATIC_SCALE, TESGlobals.MORROWIND_TO_STATIC_SCALE, TESGlobals.MORROWIND_TO_STATIC_SCALE);
+                    float scaleMultiplier = scale < 0 ? Mathf.Abs(scale) : scale;
                     skeletonModel.transform.SetParent(npcObj.transform, false);
                     skeletonModel.name = "Skeleton";
-                    skeletonModel.transform.localScale = Vector3.one;
+                    skeletonModel.transform.localScale = skeletonBaseScale * scaleMultiplier;
+                    
+                    // Apply coordinate system fix: negate Z scale and invert yaw (same as static objects)
+                    // This fixes the skeleton being laid down with Z as up instead of Y
+                    Vector3 currentSkeletonScale = skeletonModel.transform.localScale;
+                    skeletonModel.transform.localScale = new Vector3(currentSkeletonScale.x, currentSkeletonScale.y, -currentSkeletonScale.z);
+                    
+                    Vector3 skeletonEuler = skeletonModel.transform.localRotation.eulerAngles;
+                    float skeletonYaw = skeletonEuler.y;
+                    if (skeletonYaw > 180f) skeletonYaw -= 360f;
+                    skeletonModel.transform.localRotation = Quaternion.Euler(skeletonEuler.x, -skeletonYaw, skeletonEuler.z);
+                    
+                    // Process skeleton to build bone hierarchy and find head bone
+                    // Bones in skeleton files are NiNode objects that may be detected as collision meshes
+                    // We need to identify them as bones and build proper hierarchy
+                    headBoneTransform = ProcessSkeletonBones(skeletonModel);
+                    
+                    // Set up Mecanim/Animator for the skeleton using Biped naming convention
+                    SetupMecanimRig(npcObj, skeletonModel);
                 }
                 
                 // Attach body parts to skeleton if available, otherwise to NPC root
@@ -3344,20 +3482,39 @@ namespace ESMSharp.TES3Terrain
                 {
                     bodyModel.transform.SetParent(parentTransform, false);
                     bodyModel.name = "Body";
+                    // Set scale to 1 so body parts inherit skeleton's scale
+                    if (skeletonModel != null)
+                    {
+                        bodyModel.transform.localScale = Vector3.one;
+                    }
                     loadedPartsCount++;
                 }
                 
+                // Attach head to head bone if found, otherwise to skeleton root
                 if (headModel != null)
                 {
-                    headModel.transform.SetParent(parentTransform, false);
+                    Transform headParent = headBoneTransform != null ? headBoneTransform : parentTransform;
+                    headModel.transform.SetParent(headParent, false);
                     headModel.name = "Head";
+                    // Set scale to 1 so body parts inherit skeleton's scale
+                    if (skeletonModel != null)
+                    {
+                        headModel.transform.localScale = Vector3.one;
+                    }
                     loadedPartsCount++;
                 }
                 
+                // Attach hair to head bone if found, otherwise to skeleton root
                 if (hairModel != null)
                 {
-                    hairModel.transform.SetParent(parentTransform, false);
+                    Transform hairParent = headBoneTransform != null ? headBoneTransform : parentTransform;
+                    hairModel.transform.SetParent(hairParent, false);
                     hairModel.name = "Hair";
+                    // Set scale to 1 so body parts inherit skeleton's scale
+                    if (skeletonModel != null)
+                    {
+                        hairModel.transform.localScale = Vector3.one;
+                    }
                     loadedPartsCount++;
                 }
                 
@@ -3378,6 +3535,11 @@ namespace ESMSharp.TES3Terrain
                     {
                         equipmentModels[i].transform.SetParent(parentTransform, false);
                         equipmentModels[i].name = equipmentNames[i];
+                        // Set scale to 1 so equipment inherits skeleton's scale
+                        if (skeletonModel != null)
+                        {
+                            equipmentModels[i].transform.localScale = Vector3.one;
+                        }
                     }
                 }
 
@@ -3734,15 +3896,36 @@ namespace ESMSharp.TES3Terrain
                 
                 // Load skeleton model first (this is the base that body parts attach to)
                 GameObject skeletonModel = null;
+                Transform headBoneTransform = null;
                 if (!string.IsNullOrEmpty(skeletonPath))
                 {
                     skeletonModel = LoadNIFModel(skeletonPath, false);
                     if (skeletonModel != null)
                     {
+                        // Scale skeleton to match NPC scale
+                        // Skeleton NIF files are in Morrowind units, same as static objects, so use MORROWIND_TO_STATIC_SCALE
+                        // Then apply the NPC's individual scale multiplier
+                        Vector3 skeletonBaseScale = new Vector3(TESGlobals.MORROWIND_TO_STATIC_SCALE, TESGlobals.MORROWIND_TO_STATIC_SCALE, TESGlobals.MORROWIND_TO_STATIC_SCALE);
+                        float scaleMultiplier = scale < 0 ? Mathf.Abs(scale) : scale;
                         skeletonModel.transform.SetParent(npcObj.transform, false);
                         skeletonModel.name = "Skeleton";
-                        // Skeleton should be scaled the same as the NPC
-                        skeletonModel.transform.localScale = Vector3.one;
+                        skeletonModel.transform.localScale = skeletonBaseScale * scaleMultiplier;
+                        
+                        // Apply coordinate system fix: negate Z scale and invert yaw (same as static objects)
+                        // This fixes the skeleton being laid down with Z as up instead of Y
+                        Vector3 currentSkeletonScaleSync = skeletonModel.transform.localScale;
+                        skeletonModel.transform.localScale = new Vector3(currentSkeletonScaleSync.x, currentSkeletonScaleSync.y, -currentSkeletonScaleSync.z);
+                        
+                        Vector3 skeletonEulerSync = skeletonModel.transform.localRotation.eulerAngles;
+                        float skeletonYawSync = skeletonEulerSync.y;
+                        if (skeletonYawSync > 180f) skeletonYawSync -= 360f;
+                        skeletonModel.transform.localRotation = Quaternion.Euler(skeletonEulerSync.x, -skeletonYawSync, skeletonEulerSync.z);
+                        
+                        // Process skeleton to build bone hierarchy and find head bone
+                        headBoneTransform = ProcessSkeletonBones(skeletonModel);
+                        
+                        // Set up Mecanim/Animator for the skeleton using Biped naming convention
+                        SetupMecanimRig(npcObj, skeletonModel);
                     }
                     else
                     {
@@ -3769,6 +3952,11 @@ namespace ESMSharp.TES3Terrain
                         // Attach to skeleton if available, otherwise to NPC root
                         bodyModel.transform.SetParent(parentTransform, false);
                         bodyModel.name = "Body";
+                        // Set scale to 1 so body parts inherit skeleton's scale
+                        if (skeletonModel != null)
+                        {
+                            bodyModel.transform.localScale = Vector3.one;
+                        }
                         loadedPartsCount++;
                         UnityEngine.Debug.Log($"PlaceNPC: Successfully loaded body model for NPC '{npcId}'");
                     }
@@ -3795,9 +3983,15 @@ namespace ESMSharp.TES3Terrain
                     GameObject headModel = LoadBodyPartModel(headPart.ModelFilename, headPart.BodyPartId);
                     if (headModel != null)
                     {
-                        // Attach to skeleton if available, otherwise to NPC root
-                        headModel.transform.SetParent(parentTransform, false);
+                        // Attach head to head bone if found, otherwise to skeleton root
+                        Transform headParent = headBoneTransform != null ? headBoneTransform : parentTransform;
+                        headModel.transform.SetParent(headParent, false);
                         headModel.name = "Head";
+                        // Set scale to 1 so body parts inherit skeleton's scale
+                        if (skeletonModel != null)
+                        {
+                            headModel.transform.localScale = Vector3.one;
+                        }
                         loadedPartsCount++;
                     }
                     else
@@ -3812,9 +4006,15 @@ namespace ESMSharp.TES3Terrain
                     GameObject hairModel = LoadBodyPartModel(hairPart.ModelFilename, hairPart.BodyPartId);
                     if (hairModel != null)
                     {
-                        // Attach to skeleton if available, otherwise to NPC root
-                        hairModel.transform.SetParent(parentTransform, false);
+                        // Attach hair to head bone if found, otherwise to skeleton root
+                        Transform hairParent = headBoneTransform != null ? headBoneTransform : parentTransform;
+                        hairModel.transform.SetParent(hairParent, false);
                         hairModel.name = "Hair";
+                        // Set scale to 1 so body parts inherit skeleton's scale
+                        if (skeletonModel != null)
+                        {
+                            hairModel.transform.localScale = Vector3.one;
+                        }
                         loadedPartsCount++;
                     }
                     else
@@ -3843,6 +4043,12 @@ namespace ESMSharp.TES3Terrain
                         {
                             // Attach to skeleton if available, otherwise to NPC root
                             equipmentModel.transform.SetParent(parentTransform, false);
+                            
+                            // Set scale to 1 so equipment inherits skeleton's scale
+                            if (skeletonModel != null)
+                            {
+                                equipmentModel.transform.localScale = Vector3.one;
+                            }
                             
                             // Name based on equipment slot
                             string slotName = GetEquipmentSlotName(slotType);
@@ -3910,28 +4116,317 @@ namespace ESMSharp.TES3Terrain
         
         /// <summary>
         /// Gets the skeleton model path for an NPC based on gender and race.
-        /// Following OpenMW logic: baseanim.nif (male), baseanim_female.nif (female), baseanimkna.nif (beast races).
+        /// Following OpenMW logic: meshes/base_anim.nif (male), meshes/base_anim_female.nif (female), meshes/base_animkna.nif (beast races).
+        /// OpenMW uses correctMeshPath which prepends "meshes/" to the path.
+        /// Note: Morrowind uses underscores in skeleton filenames (base_anim.nif, not baseanim.nif)
         /// </summary>
         /// <param name="isFemale">Whether the NPC is female</param>
         /// <param name="isBeast">Whether the NPC is a beast race (Khajiit/Argonian)</param>
-        /// <returns>The skeleton model path, or null if unable to determine</returns>
+        /// <returns>The skeleton model path with "meshes/" prefix, or null if unable to determine</returns>
         private string GetNPCSkeletonPath(bool isFemale, bool isBeast)
         {
-            // Based on OpenMW's getActorSkeleton function
-            // Beast races (Khajiit/Argonian) use baseanimkna.nif
+            // Based on OpenMW's getActorSkeleton function and correctMeshPath
+            // OpenMW prepends "meshes/" to all mesh paths (see correctMeshPath in resourcehelpers.cpp)
+            // Morrowind actually uses underscores: base_anim.nif, base_anim_female.nif, base_animkna.nif
+            string skeletonName;
+            
+            // Beast races (Khajiit/Argonian) use base_animkna.nif
             if (isBeast)
             {
-                return "baseanimkna.nif";
+                skeletonName = "base_animkna.nif";
             }
-            // Female NPCs use baseanim_female.nif
+            // Female NPCs use base_anim_female.nif
             else if (isFemale)
             {
-                return "baseanim_female.nif";
+                skeletonName = "base_anim_female.nif";
             }
-            // Male NPCs use baseanim.nif
+            // Male NPCs use base_anim.nif
             else
             {
-                return "baseanim.nif";
+                skeletonName = "base_anim.nif";
+            }
+            
+            // Prepend "meshes/" like OpenMW does (correctMeshPath)
+            return "meshes/" + skeletonName;
+        }
+        
+        /// <summary>
+        /// Processes skeleton GameObject to build proper bone hierarchy and find bone transforms
+        /// Removes collision meshes that are actually bones, and finds bones by name for body part attachment
+        /// </summary>
+        /// <param name="skeletonRoot">The skeleton root GameObject</param>
+        /// <returns>Transform of the head bone (Bip01 Head) if found, null otherwise</returns>
+        private Transform ProcessSkeletonBones(GameObject skeletonRoot)
+        {
+            if (skeletonRoot == null)
+                return null;
+            
+            Transform headBone = null;
+            Dictionary<string, Transform> boneMap = new Dictionary<string, Transform>(StringComparer.OrdinalIgnoreCase);
+            
+            // Recursively process all children to find bones and remove collision meshes that are actually bones
+            ProcessSkeletonBonesRecursive(skeletonRoot.transform, boneMap);
+            
+            // Find head bone by common names (Morrowind uses Bip01 Head or similar)
+            string[] headBoneNames = { "Bip01 Head", "Bip01 Head1", "Head", "head", "bip01 head", "bip01 head1" };
+            foreach (string boneName in headBoneNames)
+            {
+                if (boneMap.TryGetValue(boneName, out Transform foundBone))
+                {
+                    headBone = foundBone;
+                    break;
+                }
+            }
+            
+            // Also search case-insensitively in all transforms
+            if (headBone == null)
+            {
+                foreach (Transform child in skeletonRoot.GetComponentsInChildren<Transform>())
+                {
+                    if (child == skeletonRoot.transform)
+                        continue;
+                    
+                    string childName = child.name;
+                    foreach (string headName in headBoneNames)
+                    {
+                        if (string.Equals(childName, headName, StringComparison.OrdinalIgnoreCase))
+                        {
+                            headBone = child;
+                            break;
+                        }
+                    }
+                    if (headBone != null)
+                        break;
+                }
+            }
+            
+            return headBone;
+        }
+        
+        /// <summary>
+        /// Recursively processes skeleton transforms to identify bones and remove collision meshes
+        /// </summary>
+        private void ProcessSkeletonBonesRecursive(Transform parent, Dictionary<string, Transform> boneMap)
+        {
+            if (parent == null)
+                return;
+            
+            // Process all children
+            List<Transform> children = new List<Transform>();
+            foreach (Transform child in parent)
+            {
+                children.Add(child);
+            }
+            
+            foreach (Transform child in children)
+            {
+                string childName = child.name;
+                
+                // Check if this is a bone (NiNode) that was incorrectly marked as a collision mesh
+                // Bones typically:
+                // 1. Have no MeshRenderer (collision meshes have MeshCollider but no MeshRenderer)
+                // 2. Have children (bones form a hierarchy)
+                // 3. Have names like "Bip01", "Bip01 Head", etc.
+                bool hasMeshRenderer = child.GetComponent<MeshRenderer>() != null;
+                bool hasMeshCollider = child.GetComponent<MeshCollider>() != null;
+                bool hasChildren = child.childCount > 0;
+                bool looksLikeBone = childName.Contains("Bip01", StringComparison.OrdinalIgnoreCase) ||
+                                     childName.Contains("Bone", StringComparison.OrdinalIgnoreCase) ||
+                                     childName.Contains("Head", StringComparison.OrdinalIgnoreCase) ||
+                                     childName.Contains("Spine", StringComparison.OrdinalIgnoreCase) ||
+                                     childName.Contains("Neck", StringComparison.OrdinalIgnoreCase);
+                
+                // If it looks like a bone but has a MeshCollider and no MeshRenderer, it's probably a bone, not a collision mesh
+                if (looksLikeBone && hasMeshCollider && !hasMeshRenderer && hasChildren)
+                {
+                    // Remove the MeshCollider - this is a bone, not a collision mesh
+                    MeshCollider collider = child.GetComponent<MeshCollider>();
+                    if (collider != null)
+                    {
+                        UnityEngine.Object.DestroyImmediate(collider);
+                    }
+                    
+                    // Also remove MeshFilter if present (bones don't need meshes)
+                    MeshFilter meshFilter = child.GetComponent<MeshFilter>();
+                    if (meshFilter != null)
+                    {
+                        UnityEngine.Object.DestroyImmediate(meshFilter);
+                    }
+                }
+                
+                // Add to bone map for lookup
+                if (!string.IsNullOrEmpty(childName))
+                {
+                    boneMap[childName] = child;
+                }
+                
+                // Recursively process children
+                ProcessSkeletonBonesRecursive(child, boneMap);
+            }
+        }
+        
+        /// <summary>
+        /// Sets up Unity Mecanim/Animator rig for NPC skeleton using Biped naming convention
+        /// Maps Bip01 bones to Unity's HumanBodyBones for animation support
+        /// </summary>
+        private void SetupMecanimRig(GameObject npcRoot, GameObject skeletonRoot)
+        {
+            if (npcRoot == null || skeletonRoot == null)
+                return;
+            
+            try
+            {
+                // Get or add Animator component to NPC root
+                Animator animator = npcRoot.GetComponent<Animator>();
+                if (animator == null)
+                {
+                    animator = npcRoot.AddComponent<Animator>();
+                }
+                
+                // Create HumanDescription for avatar mapping
+                HumanDescription humanDescription = new HumanDescription();
+                
+                // Build bone mapping from Biped naming to Unity HumanBodyBones
+                // Unity recognizes standard Biped naming conventions automatically
+                List<HumanBone> humanBones = new List<HumanBone>();
+                
+                // Map Biped bones to Unity HumanBodyBones
+                // Unity's Avatar system can auto-detect Biped naming, but we'll explicitly map key bones
+                // Order matters: more specific names first to avoid duplicates
+                Dictionary<string, HumanBodyBones> bipedToHumanBoneMap = new Dictionary<string, HumanBodyBones>(StringComparer.OrdinalIgnoreCase)
+                {
+                    // Core skeleton - prioritize "Bip01 Pelvis" over "Bip01" to avoid duplicates
+                    { "Bip01 Pelvis", HumanBodyBones.Hips },
+                    { "Bip01 Spine", HumanBodyBones.Spine },
+                    { "Bip01 Spine1", HumanBodyBones.Chest },
+                    { "Bip01 Spine2", HumanBodyBones.UpperChest },
+                    { "Bip01 Neck", HumanBodyBones.Neck },
+                    { "Bip01 Head", HumanBodyBones.Head },
+                    
+                    // Left arm
+                    { "Bip01 L Clavicle", HumanBodyBones.LeftShoulder },
+                    { "Bip01 L UpperArm", HumanBodyBones.LeftUpperArm },
+                    { "Bip01 L Forearm", HumanBodyBones.LeftLowerArm },
+                    { "Bip01 L Hand", HumanBodyBones.LeftHand },
+                    
+                    // Right arm
+                    { "Bip01 R Clavicle", HumanBodyBones.RightShoulder },
+                    { "Bip01 R UpperArm", HumanBodyBones.RightUpperArm },
+                    { "Bip01 R Forearm", HumanBodyBones.RightLowerArm },
+                    { "Bip01 R Hand", HumanBodyBones.RightHand },
+                    
+                    // Left leg
+                    { "Bip01 L Thigh", HumanBodyBones.LeftUpperLeg },
+                    { "Bip01 L Calf", HumanBodyBones.LeftLowerLeg },
+                    { "Bip01 L Foot", HumanBodyBones.LeftFoot },
+                    { "Bip01 L Toe0", HumanBodyBones.LeftToes },
+                    
+                    // Right leg
+                    { "Bip01 R Thigh", HumanBodyBones.RightUpperLeg },
+                    { "Bip01 R Calf", HumanBodyBones.RightLowerLeg },
+                    { "Bip01 R Foot", HumanBodyBones.RightFoot },
+                    { "Bip01 R Toe0", HumanBodyBones.RightToes },
+                };
+                
+                // Track which HumanBodyBones we've already mapped to avoid duplicates
+                HashSet<HumanBodyBones> mappedBones = new HashSet<HumanBodyBones>();
+                
+                // Find all bones in skeleton and map them
+                Transform[] allBones = skeletonRoot.GetComponentsInChildren<Transform>();
+                foreach (Transform bone in allBones)
+                {
+                    if (bone == skeletonRoot.transform)
+                        continue;
+                    
+                    string boneName = bone.name;
+                    HumanBodyBones? humanBone = null;
+                    
+                    // Try exact match first (prioritize specific names)
+                    if (bipedToHumanBoneMap.TryGetValue(boneName, out HumanBodyBones exactMatch))
+                    {
+                        humanBone = exactMatch;
+                    }
+                    // Try partial matches for variations (e.g., "Bip01 Head1" -> "Bip01 Head")
+                    else
+                    {
+                        // Check partial matches, but only if we haven't already mapped this HumanBodyBones
+                        foreach (var kvp in bipedToHumanBoneMap)
+                        {
+                            if (boneName.Contains(kvp.Key, StringComparison.OrdinalIgnoreCase) && !mappedBones.Contains(kvp.Value))
+                            {
+                                humanBone = kvp.Value;
+                                break;
+                            }
+                        }
+                    }
+                    
+                    // Only add if we found a mapping and haven't mapped this HumanBodyBones yet
+                    if (humanBone.HasValue && !mappedBones.Contains(humanBone.Value))
+                    {
+                        HumanBone humanBoneMapping = new HumanBone
+                        {
+                            humanName = humanBone.Value.ToString(),
+                            boneName = boneName,
+                            limit = new HumanLimit
+                            {
+                                useDefaultValues = true
+                            }
+                        };
+                        humanBones.Add(humanBoneMapping);
+                        mappedBones.Add(humanBone.Value);
+                    }
+                }
+                
+                // Fallback: if "Bip01 Pelvis" wasn't found, try "Bip01" for Hips
+                if (!mappedBones.Contains(HumanBodyBones.Hips))
+                {
+                    Transform bip01Root = skeletonRoot.transform.Find("Bip01");
+                    if (bip01Root != null)
+                    {
+                        HumanBone humanBoneMapping = new HumanBone
+                        {
+                            humanName = HumanBodyBones.Hips.ToString(),
+                            boneName = "Bip01",
+                            limit = new HumanLimit
+                            {
+                                useDefaultValues = true
+                            }
+                        };
+                        humanBones.Add(humanBoneMapping);
+                        mappedBones.Add(HumanBodyBones.Hips);
+                    }
+                }
+                
+                // Set up HumanDescription
+                humanDescription.human = humanBones.ToArray();
+                humanDescription.skeleton = new SkeletonBone[0]; // Unity will auto-generate from bone hierarchy
+                humanDescription.upperArmTwist = 0.5f;
+                humanDescription.lowerArmTwist = 0.5f;
+                humanDescription.upperLegTwist = 0.5f;
+                humanDescription.lowerLegTwist = 0.5f;
+                humanDescription.armStretch = 0.05f;
+                humanDescription.legStretch = 0.05f;
+                humanDescription.feetSpacing = 0.0f;
+                humanDescription.hasTranslationDoF = false;
+                
+                // Create Avatar from HumanDescription
+                // Note: Avatar creation requires the skeleton root to be the root of the bone hierarchy
+                Avatar avatar = AvatarBuilder.BuildHumanAvatar(npcRoot, humanDescription);
+                
+                if (avatar != null && avatar.isValid)
+                {
+                    animator.avatar = avatar;
+                    animator.applyRootMotion = false; // NPCs use root motion from animations, not transform
+                    //UnityEngine.Debug.Log($"SetupMecanimRig: Successfully created Avatar for NPC '{npcRoot.name}' with {humanBones.Count} bone mappings");
+                }
+                else
+                {
+                    UnityEngine.Debug.LogWarning($"SetupMecanimRig: Failed to create valid Avatar for NPC '{npcRoot.name}'. Avatar may be null or invalid.");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                UnityEngine.Debug.LogError($"SetupMecanimRig: Error setting up Mecanim rig for NPC '{npcRoot.name}': {ex.Message}\n{ex.StackTrace}");
             }
         }
         
@@ -4169,6 +4664,27 @@ namespace ESMSharp.TES3Terrain
             if (nifData == null)
             {
                 // File not in cache, try to extract from BSA
+                // For skeleton files, preserve the full path (e.g., "meshes/baseanim.nif")
+                // For other files, use just the base filename
+                string bsaSearchPath = modelFilename;
+                bool isSkeletonFile = modelFilename.Contains("baseanim") || modelFilename.Contains("skeleton");
+                
+                // If it's a skeleton file with "meshes/" prefix, try extracting with full path first
+                if (isSkeletonFile && modelFilename.StartsWith("meshes/", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Try with full path first (e.g., "meshes/baseanim.nif")
+                    string skeletonExtractedFilename = TryExtractFromBSAWithPath(modelFilename);
+                    if (!string.IsNullOrEmpty(skeletonExtractedFilename))
+                    {
+                        // File was extracted, try loading again
+                        string normalizedExtractedFilename = Path.GetFileName(skeletonExtractedFilename);
+                        normalizedExtractedFilename = normalizedExtractedFilename.Replace('\\', '/');
+                        yield return LoadNIFModelCoroutine(normalizedExtractedFilename, combineMeshes, onComplete, isTreeOrGrass);
+                        yield break;
+                    }
+                }
+                
+                // Fallback: try with just the base filename (for non-skeleton files or if full path failed)
                 string baseFilenameNoExtForBSA = Path.GetFileNameWithoutExtension(modelFilename);
                 string extractedFilename = TryExtractFromBSA(baseFilenameNoExtForBSA);
                 
@@ -4184,9 +4700,9 @@ namespace ESMSharp.TES3Terrain
                 }
                 
                 // Log more details for skeleton files to help debug
-                if (modelFilename.Contains("baseanim") || modelFilename.Contains("skeleton"))
+                if (isSkeletonFile)
                 {
-                    UnityEngine.Debug.LogWarning($"LoadNIFModel: Skeleton file not found: {modelFilename}. Checked cache and BSA archive '{_bsa}'. Make sure the skeleton files are in the BSA or cache directory.");
+                    UnityEngine.Debug.LogWarning($"LoadNIFModel: Skeleton file not found: {modelFilename}. Checked cache and BSA archive '{_bsa}'. Tried paths: '{modelFilename}' and '{baseFilenameNoExtForBSA}.nif'. Make sure the skeleton files are in the BSA or cache directory.");
                 }
                 else
                 {
