@@ -499,7 +499,7 @@ namespace ESMSharp.NIF
             // Check all ESM cache directories (not just the one passed in)
             string[] loadedESMs = TESESMLibrary.GetLoadedESMFilenames();
             string foundTexturePath = null;
-            
+
             // Try to find texture in cache across all ESM cache directories
             string[] extensions = new[] { ".png", ".dds", ".tga" };
             string originalExt = System.IO.Path.GetExtension(baseFilename);
@@ -507,7 +507,7 @@ namespace ESMSharp.NIF
             {
                 extensions = new[] { originalExt.ToLower() }.Concat(extensions).ToArray();
             }
-            
+
             // Try preferred ESM first if specified
             if (!string.IsNullOrEmpty(esm))
             {
@@ -534,13 +534,13 @@ namespace ESMSharp.NIF
                         continue;
                     
                     string textureDir = System.IO.Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Textures", esmName);
-                    foreach (string ext in extensions)
-                    {
-                        string testPath = System.IO.Path.Combine(textureDir, baseNameNoExt + ext);
-                        if (File.Exists(testPath))
-                        {
-                            foundTexturePath = testPath;
-                            break;
+            foreach (string ext in extensions)
+            {
+                string testPath = System.IO.Path.Combine(textureDir, baseNameNoExt + ext);
+                if (File.Exists(testPath))
+                {
+                    foundTexturePath = testPath;
+                    break;
                         }
                     }
                     if (foundTexturePath != null) break;
@@ -604,7 +604,7 @@ namespace ESMSharp.NIF
         {
             // Use TESBSALibrary to search across all BSAs (same approach as model extraction)
             HashSet<string> allBSAFiles = TESBSALibrary.GetAllFileNames();
-            
+
             // Normalize the texture path first
             string normalizedPath = NormalizeTexturePath(texturePath);
             
@@ -662,7 +662,7 @@ namespace ESMSharp.NIF
                 {
                     string bsaBaseName = System.IO.Path.GetFileName(bsaFileName);
                     if (bsaBaseName.Equals(normalizedBaseFilename, StringComparison.OrdinalIgnoreCase))
-                    {
+                {
                         foundPath = bsaFileName;
                         break;
                     }
@@ -770,9 +770,9 @@ namespace ESMSharp.NIF
                 
                 if (extractSuccess)
                 {
-                    // If it's a DDS, try to convert to PNG
+                        // If it's a DDS, try to convert to PNG
                     if (actualExt == ".dds")
-                    {
+                        {
                         try
                         {
                             byte[] ddsData = System.IO.File.ReadAllBytes(outputPath);
@@ -826,11 +826,11 @@ namespace ESMSharp.NIF
                         {
                             UnityEngine.Debug.LogWarning($"Error converting extracted TGA to PNG: {ex.Message}");
                         }
-                    }
-                    
+                        }
+
                     //UnityEngine.Debug.Log($"Extracted texture from BSA: {foundPath} -> {System.IO.Path.GetFileName(outputPath)} (from {sourceESM})");
-                    return outputPath;
-                }
+                        return outputPath;
+                    }
                 else
                 {
                     UnityEngine.Debug.LogWarning($"Failed to extract texture '{foundPath}' from BSA archives");

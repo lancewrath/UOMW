@@ -228,7 +228,21 @@ namespace ESMSharp.TES3
 
 
         /// <summary>
-        /// Creates cell GameObjects from CELL records
+        /// Creates cell GameObjects from CELL records (coroutine version with prioritization)
+        /// </summary>
+        public System.Collections.IEnumerator CreateCellsCoroutine(Transform parent, Vector3? priorityPosition, int cellsPerFrame, ESMSharp.TES3Terrain.CellManager cellManager)
+        {
+            Record[] records = TESESMLibrary.GetAllRecords();
+            
+            string[] loadedESMs = TESESMLibrary.GetLoadedESMFilenames();
+            string primaryESM = loadedESMs.Length > 0 ? loadedESMs[0] : "Morrowind.esm";
+            string primaryBSA = System.IO.Path.GetFileNameWithoutExtension(primaryESM) + ".bsa";
+            
+            yield return cellManager.CreateCellsCoroutine(records, parent, primaryESM, primaryBSA, priorityPosition, cellsPerFrame);
+        }
+
+        /// <summary>
+        /// Creates cell GameObjects from CELL records (synchronous version for backwards compatibility)
         /// </summary>
         public CellManager CreateCells(Transform parent = null)
         {

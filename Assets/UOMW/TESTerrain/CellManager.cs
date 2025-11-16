@@ -1,7 +1,9 @@
 using ESMSharp.TES3;
 using ESMSharp.TES3.Records;
 using System;
+using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 
 namespace ESMSharp.TES3Terrain
@@ -19,21 +21,168 @@ namespace ESMSharp.TES3Terrain
         private string _bsa = "";
 
         /// <summary>
-        /// Creates cell GameObjects from CELL records
+        /// Creates cell GameObjects from CELL records (coroutine version)
+        /// Only creates cells that have a matching LAND record
+        /// Prioritizes cells near the player position
+        /// </summary>
+        public IEnumerator CreateCellsCoroutine(Record[] records, Transform parent = null, string esm = "", string bsa = "", Vector3? priorityPosition = null, int cellsPerFrame = 15)
+        {
+            _allRecords = records;
+            _esm = esm;
+            _bsa = bsa;
+
+            // First, build a set of all cell coordinates that have LAND records
+            // This ensures we only create cells where there's actual terrain data
+            HashSet<(int x, int y)> landCellCoordinates = new HashSet<(int, int)>();
+            
+            foreach (Record rec in records)
+            {
+                RecordLand landRecord = rec as RecordLand;
+                if (landRecord != null && landRecord.subRecords != null)
+                {
+                    foreach (SubRecords subrec in landRecord.subRecords)
+                    {
+                        if (subrec is SubRecordLandINTV intv)
+                        {
+                            int landCellX = (int)intv.CellX;
+                            int landCellY = (int)intv.CellY;
+                            landCellCoordinates.Add((landCellX, landCellY));
+                        }
+                    }
+                }
+            }
+            
+            UnityEngine.Debug.Log($"Found {landCellCoordinates.Count} cells with LAND records");
+
+            // Create a parent GameObject for all cells
+            GameObject cellsParent = new GameObject("Cells");
+            if (parent != null)
+            {
+                cellsParent.transform.SetParent(parent);
+            }
+            _parent = cellsParent.transform;
+
+            // Collect all cells to create with their metadata
+            List<(RecordCell cell, int gridX, int gridY, bool isInterior, string cellName)> cellsToCreate = new List<(RecordCell, int, int, bool, string)>();
+
+            foreach (Record rec in records)
+            {
+                RecordCell cell = rec as RecordCell;
+                if (cell == null)
+                    continue;
+
+                if (cell.subRecords == null)
+                    continue;
+
+                // Extract cell data
+                string cellName = null;
+                int gridX = 0;
+                int gridY = 0;
+                bool isInterior = false;
+
+                foreach (SubRecords subrec in cell.subRecords)
+                {
+                    if (subrec == null)
+                        continue;
+
+                    if (subrec is SubRecordCellRGNN)
+                    {
+                        SubRecordCellRGNN rgnn = subrec as SubRecordCellRGNN;
+                        cellName = rgnn.name;
+                    }
+                    else if (subrec is SubRecordCellDATA)
+                    {
+                        SubRecordCellDATA data = subrec as SubRecordCellDATA;
+                        gridX = data.gridX;
+                        gridY = data.gridY;
+                        // Check if interior (flag 0x01)
+                        isInterior = (data.flags & 0x01) != 0;
+                    }
+                }
+
+                // Only create cells that have a matching LAND record (exterior cells only)
+                // This ensures cells match exactly with the heightmap
+                if (!isInterior && !landCellCoordinates.Contains((gridX, gridY)))
+                {
+                    continue; // Skip cells without LAND records
+                }
+
+                cellsToCreate.Add((cell, gridX, gridY, isInterior, cellName));
+            }
+
+            // Get priority position (player position or default to origin)
+            Vector3 priorityPos = priorityPosition ?? Vector3.zero;
+            int priorityCellX = Mathf.FloorToInt(priorityPos.x / TESGlobals.CELL_SIZE);
+            int priorityCellY = Mathf.FloorToInt(priorityPos.z / TESGlobals.CELL_SIZE);
+
+            // Sort cells by distance from priority position (closest first)
+            cellsToCreate = cellsToCreate.OrderBy(c =>
+            {
+                int dx = c.gridX - priorityCellX;
+                int dy = c.gridY - priorityCellY;
+                return dx * dx + dy * dy; // Distance squared (no need for sqrt)
+            }).ToList();
+
+            UnityEngine.Debug.Log($"Creating {cellsToCreate.Count} cells, prioritizing around cell ({priorityCellX}, {priorityCellY})");
+
+            // Process cells in batches
+            int cellCount = 0;
+            for (int i = 0; i < cellsToCreate.Count; i++)
+            {
+                var (cell, gridX, gridY, isInterior, cellName) = cellsToCreate[i];
+
+                // Create cell name
+                string finalCellName;
+                if (!string.IsNullOrEmpty(cellName))
+                {
+                    finalCellName = $"{cellName} ({gridX}, {gridY})";
+                }
+                else
+                {
+                    finalCellName = isInterior ? $"Interior ({gridX}, {gridY})" : $"Cell ({gridX}, {gridY})";
+                }
+
+                // Create cell GameObject
+                GameObject cellObj = CreateCell(finalCellName, gridX, gridY, isInterior, cell);
+                if (cellObj != null)
+                {
+                    // Store cell by a unique key (grid coordinates)
+                    string cellKey = $"{gridX}_{gridY}";
+                    if (!_cells.ContainsKey(cellKey))
+                    {
+                        _cells[cellKey] = cellObj;
+                        _cellRecords[cellKey] = cell;
+                        cellCount++;
+                    }
+                }
+
+                // Yield every N cells to prevent frame drops
+                if ((i + 1) % cellsPerFrame == 0 || i == cellsToCreate.Count - 1)
+                {
+                    yield return null; // Yield control back to Unity
+                }
+            }
+
+            UnityEngine.Debug.Log($"Created {cellCount} cell GameObjects (only cells with LAND records for exterior cells)");
+        }
+
+        /// <summary>
+        /// Creates cell GameObjects from CELL records (legacy synchronous method)
         /// </summary>
         public void CreateCells(Record[] records, Transform parent = null, string esm = "", string bsa = "")
         {
             _allRecords = records;
             _esm = esm;
             _bsa = bsa;
-            CreateCells(records, parent);
+            // For backwards compatibility, use the old synchronous method
+            // Note: This will block, but maintains compatibility
+            CreateCellsSync(records, parent);
         }
 
         /// <summary>
-        /// Creates cell GameObjects from CELL records (internal method)
-        /// Only creates cells that have a matching LAND record
+        /// Synchronous cell creation (internal method for backwards compatibility)
         /// </summary>
-        public void CreateCells(Record[] records, Transform parent = null)
+        private void CreateCellsSync(Record[] records, Transform parent = null)
         {
             // First, build a set of all cell coordinates that have LAND records
             // This ensures we only create cells where there's actual terrain data

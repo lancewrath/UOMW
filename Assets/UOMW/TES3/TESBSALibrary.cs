@@ -84,7 +84,9 @@ namespace ESMSharp.TES3
                 }
                 else
                 {
-                    Debug.LogWarning($"TESBSALibrary: BSA file not found for ESM '{esmFilename}': {bsaPath}");
+                    // Some ESMs (especially expansion mods) don't have BSA files - assets are in the file folder instead
+                    // This is expected behavior, so log as info rather than warning
+                    Debug.Log($"TESBSALibrary: No BSA file found for ESM '{esmFilename}' (assets may be in file folder): {bsaPath}");
                 }
             }
             

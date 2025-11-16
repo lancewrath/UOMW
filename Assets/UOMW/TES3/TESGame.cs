@@ -77,6 +77,36 @@ namespace ESMSharp.TES3
             _isGenerating = true;
             Debug.Log("TESGame: Starting initialization...");
             
+            // Step 0: Try to find player object early for cell prioritization
+            Vector3? priorityPosition = null;
+            if (_playerObject == null)
+            {
+                GameObject[] playerObjects = GameObject.FindGameObjectsWithTag(playerTag);
+                if (playerObjects.Length > 0)
+                {
+                    _playerObject = playerObjects[0];
+                }
+                else
+                {
+                    GameObject playerByName = GameObject.Find("Player");
+                    if (playerByName != null)
+                    {
+                        _playerObject = playerByName;
+                    }
+                    else
+                    {
+                        _playerObject = GameObject.FindGameObjectWithTag("MainCamera")?.transform.parent?.gameObject;
+                    }
+                }
+            }
+            
+            // Capture player position before disabling (for cell prioritization)
+            if (_playerObject != null)
+            {
+                priorityPosition = _playerObject.transform.position;
+                Debug.Log($"TESGame: Captured player position for cell prioritization: {priorityPosition.Value}");
+            }
+            
             // Step 1: Disable all player objects
             DisablePlayerObjects();
             
@@ -108,10 +138,24 @@ namespace ESMSharp.TES3
             _tes3Master.GenerateTerrain();
             yield return null; // Yield a frame
             
-            // Step 5: Generate all cells
+            // Step 5: Generate all cells (prioritize cells near player)
             Debug.Log("TESGame: Generating cells...");
-            _tes3Master.GenerateStatics();
-            _cellManager = _tes3Master.CreateCells(transform);
+            
+            // Use captured player position for cell prioritization (or use origin if player not found)
+            if (priorityPosition == null)
+            {
+                Debug.Log("TESGame: Player not found, using origin (0,0,0) for cell prioritization");
+            }
+            else
+            {
+                Debug.Log($"TESGame: Prioritizing cells near player at {priorityPosition.Value}");
+            }
+            
+            // Create CellManager first, then run the coroutine
+            _cellManager = new ESMSharp.TES3Terrain.CellManager();
+            
+            // Create cells using coroutine with prioritization (15 cells per frame for smooth loading)
+            yield return _tes3Master.CreateCellsCoroutine(transform, priorityPosition, 15, _cellManager);
             if (_cellManager == null)
             {
                 Debug.LogError("TESGame: Failed to create CellManager!");

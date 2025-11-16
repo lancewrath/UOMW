@@ -35,12 +35,13 @@ namespace ESMSharp.TES3Terrain
         }
 
         // Helper function to convert DDS to PNG using Pfim
-        #if UNITY_EDITOR
         /// <summary>
         /// Sets texture import settings to disable alpha source (prevents shininess in URP terrain)
+        /// In builds, this is a no-op since import settings can't be changed at runtime
         /// </summary>
         private void SetTextureImportSettings(string texturePath)
         {
+            #if UNITY_EDITOR
             try
             {
                 // Convert to asset path (relative to Assets folder)
@@ -74,8 +75,11 @@ namespace ESMSharp.TES3Terrain
             {
                 //UnityEngine.Debug.LogWarning($"Failed to set texture import settings for {texturePath}: {ex.Message}");
             }
+            #else
+            // In builds, import settings are already baked in, so this is a no-op
+            // The settings should have been applied during development/editor time
+            #endif
         }
-        #endif
 
         public bool ConvertDDSToPNG(byte[] ddsData, string outputPngPath)
         {
@@ -468,7 +472,11 @@ namespace ESMSharp.TES3Terrain
                                 textureIndex,
                                 vtexIndex,
                                 ConvertDDSToPNG,
+                                #if UNITY_EDITOR
                                 SetTextureImportSettings
+                                #else
+                                null
+                                #endif
                             );
                             
                             if (textureEntry != null)
@@ -538,7 +546,11 @@ namespace ESMSharp.TES3Terrain
                                     -1,
                                     0,
                                     ConvertDDSToPNG,
+                                    #if UNITY_EDITOR
                                     SetTextureImportSettings
+                                    #else
+                                    null
+                                    #endif
                                 );
                             }
                             
@@ -578,7 +590,11 @@ namespace ESMSharp.TES3Terrain
                                     -1,
                                     0,
                                     ConvertDDSToPNG,
+                                    #if UNITY_EDITOR
                                     SetTextureImportSettings
+                                    #else
+                                    null
+                                    #endif
                                 );
                             }
                             
@@ -809,7 +825,11 @@ namespace ESMSharp.TES3Terrain
                                         -1,                     // ltexIndex
                                         0,                      // vtexIndex
                                         ConvertDDSToPNG,        // convertDDSToPNGFunc
+                                        #if UNITY_EDITOR
                                         SetTextureImportSettings // setTextureImportSettingsFunc
+                                        #else
+                                        null
+                                        #endif
                                     );
                                 }
                             }
@@ -910,7 +930,11 @@ namespace ESMSharp.TES3Terrain
                                         -1,                     // ltexIndex
                                         0,                      // vtexIndex
                                         ConvertDDSToPNG,        // convertDDSToPNGFunc
+                                        #if UNITY_EDITOR
                                         SetTextureImportSettings // setTextureImportSettingsFunc
+                                        #else
+                                        null
+                                        #endif
                                     );
                                 }
                             }
@@ -3500,9 +3524,11 @@ namespace ESMSharp.TES3Terrain
             
             // Create global height array (no count array needed - direct write)
             float[][] globalHeights = new float[height][];
+            bool[][] globalHeightsValid = new bool[height][]; // Track which pixels are from valid cells
             for (int i = 0; i < height; i++)
             {
                 globalHeights[i] = new float[width];
+                globalHeightsValid[i] = new bool[width];
             }
             
             const int CELL = 65;
@@ -3682,6 +3708,7 @@ namespace ESMSharp.TES3Terrain
                         if (px < 0 || px >= width) continue;
                         
                         globalHeights[py][px] = cellHeightsArray[ly][lx];
+                        globalHeightsValid[py][px] = true; // Mark as valid (from existing cell)
                     }
                 }
             }
@@ -3850,22 +3877,38 @@ namespace ESMSharp.TES3Terrain
                 // No header, just raw pixel data
                 byte[] rawBytes = new byte[width * height * 2]; // 2 bytes per pixel (16-bit)
                 int byteIndex = 0;
+                int missingPixelCount = 0;
+                int writtenPixelCount = 0;
                 
                 for (int y = 0; y < height; y++)
                 {
                     for (int x = 0; x < width; x++)
                     {
-                        float h = globalHeights[y][x];
-                        // Normalize: min maps to 0.0 (black), max maps to 1.0 (white)
-                        float heightValue = (h - globalMinHeight) / globalHeightRange;
-                        heightValue = Mathf.Clamp01(heightValue);
-                        
-                        // Convert to 16-bit (0-65535)
-                        ushort rawHeightValue = (ushort)(heightValue * 65535.0f);
-                        
-                        // Write as little-endian (LSB first, then MSB)
-                        rawBytes[byteIndex++] = (byte)(rawHeightValue & 0xFF);        // LSB
-                        rawBytes[byteIndex++] = (byte)((rawHeightValue >> 8) & 0xFF); // MSB
+                        // Check if this pixel is from a valid (existing) cell
+                        if (globalHeightsValid[y][x])
+                        {
+                            writtenPixelCount++;
+                            float h = globalHeights[y][x];
+                            // Normalize: min maps to 0.0 (black), max maps to 1.0 (white)
+                            float heightValue = (h - globalMinHeight) / globalHeightRange;
+                            heightValue = Mathf.Clamp01(heightValue);
+                            
+                            // Convert to 16-bit (0-65535)
+                            ushort rawHeightValue = (ushort)(heightValue * 65535.0f);
+                            
+                            // Write as little-endian (LSB first, then MSB)
+                            rawBytes[byteIndex++] = (byte)(rawHeightValue & 0xFF);        // LSB
+                            rawBytes[byteIndex++] = (byte)((rawHeightValue >> 8) & 0xFF); // MSB
+                        }
+                        else
+                        {
+                            missingPixelCount++;
+                            // Missing cells (ocean areas without LAND records): write 0 (black/sea level)
+                            // WARNING: This can create cliffs where terrain cells meet ocean cells
+                            // If you see cliffs in the ocean, this is likely the cause
+                            rawBytes[byteIndex++] = 0;
+                            rawBytes[byteIndex++] = 0;
+                        }
                     }
                 }
                 
@@ -4179,6 +4222,8 @@ namespace ESMSharp.TES3Terrain
                 // No header, just raw pixel data
                 byte[] rawBytes = new byte[width * height * 2]; // 2 bytes per pixel (16-bit)
                 int byteIndex = 0;
+                int missingPixelCount = 0;
+                int writtenPixelCount = 0;
                 
                 for (int y = 0; y < height; y++)
                 {
@@ -4186,6 +4231,7 @@ namespace ESMSharp.TES3Terrain
                     {
                         if (globalHeightsCount[y][x] > 0)
                         {
+                            writtenPixelCount++;
                             // Use raw height value (before normalization/contrast curve)
                             float h = globalHeights[y][x];
                             // Normalize from sea level (0) to max height (32,768)
@@ -4203,8 +4249,10 @@ namespace ESMSharp.TES3Terrain
                         }
                         else
                         {
+                            missingPixelCount++;
                             // Unwritten pixels (missing cells): write 0 (sea level / black)
-                            // This fills transparent areas with sea level to avoid cliffs in Unity terrain
+                            // WARNING: This can create cliffs where terrain cells meet ocean cells
+                            // If you see cliffs in the ocean, this is likely the cause
                             rawBytes[byteIndex++] = 0;
                             rawBytes[byteIndex++] = 0;
                         }

@@ -29,7 +29,7 @@ namespace ESMSharp
             return Encoding.ASCII.GetString(array);
         }
 
-
+#if DEBUG
         public static void Close()
         {
             if (file != null)
@@ -38,6 +38,7 @@ namespace ESMSharp
                 file = null;
             }
         }
+#endif
 
         public static void LogBuffer(string data, params object[] objects)
         {
