@@ -1157,6 +1157,7 @@ namespace ESMSharp.NIF
                 
                 // Create root GameObject
                 GameObject rootObj = new GameObject(System.IO.Path.GetFileNameWithoutExtension(filename));
+                // Root stays at identity - coordinate system conversion applied to child meshes individually
                 rootObj.transform.rotation = Quaternion.identity;
                 
                 // Morrowind NIF files use inches, Unity uses meters
@@ -1164,7 +1165,10 @@ namespace ESMSharp.NIF
                 // For trees: use standard inches-to-meters conversion (0.0254) at mesh level
                 const float INCHES_TO_METERS_STANDARD = 0.0254f;
                 const float MORROWIND_TO_TERRAIN_SCALE = 64f / 8192f; // 0.0078125
-                Quaternion meshRotation = Quaternion.Euler(-90f, 0f, 0f);
+                // For combined meshes (trees/grass), coordinate system conversion is already handled in ConvertMorrowindTransformToUnity
+                // No additional rotation needed - the transform conversion handles it
+                Quaternion meshRotation = Quaternion.identity; // Render mesh rotation
+                Quaternion collisionMeshRotation = Quaternion.identity; // Collision mesh rotation
                 
                 // For trees (combineMeshes=true): scale at mesh level using standard conversion
                 // For static objects (combineMeshes=false): scale at GameObject level using MORROWIND_TO_TERRAIN_SCALE
@@ -1193,7 +1197,7 @@ namespace ESMSharp.NIF
                         // Combine collision meshes into a single mesh for MeshCollider
                         if (collisionMeshesList.Count > 0)
                         {
-                            var (collisionMesh, _) = CombineMeshes(collisionMeshesList, vertexScale, meshRotation, _esm, isTree: false);
+                            var (collisionMesh, _) = CombineMeshes(collisionMeshesList, vertexScale, collisionMeshRotation, _esm, isTree: false);
                             if (collisionMesh != null)
                             {
                                 MeshCollider meshCollider = rootObj.AddComponent<MeshCollider>();
@@ -1222,11 +1226,10 @@ namespace ESMSharp.NIF
                     GameObject meshObj = new GameObject(string.IsNullOrEmpty(nifMesh.Name) ? $"Mesh_{i}" : nifMesh.Name);
                     meshObj.transform.SetParent(rootObj.transform);
                     meshObj.transform.localPosition = Vector3.zero;
+                    // Coordinate system conversion is already handled in ExtractMeshFromTriShape at vertex level
+                    // No additional rotation or scale needed - the vertex-level conversion handles it
                     meshObj.transform.localRotation = Quaternion.identity;
-                    // Note: We previously flipped X scale here to fix mirroring, but this was a workaround.
-                    // The correct fix is to use OpenMW's rotation conversion (negated axes) in PlaceStatics.cs
-                    // If mirroring still occurs, it may be due to NIF transform accumulation or coordinate system issues
-                    meshObj.transform.localScale = Vector3.one; // Use identity scale - rotation conversion should handle orientation
+                    meshObj.transform.localScale = Vector3.one;
                     
                     Mesh unityMesh = CreateUnityMeshFromNIFMesh(nifMesh, vertexScale);
                     
@@ -1246,8 +1249,10 @@ namespace ESMSharp.NIF
                     GameObject collisionObj = new GameObject(string.IsNullOrEmpty(nifMesh.Name) ? $"Collision_{i}" : nifMesh.Name + "_Collision");
                     collisionObj.transform.SetParent(rootObj.transform);
                     collisionObj.transform.localPosition = Vector3.zero;
+                    // Coordinate system conversion is already handled in ExtractMeshFromTriShape at vertex level
+                    // No additional rotation or scale needed - the vertex-level conversion handles it
                     collisionObj.transform.localRotation = Quaternion.identity;
-                    collisionObj.transform.localScale = Vector3.one; // Ensure collision objects have identity scale (parent scale will apply)
+                    collisionObj.transform.localScale = Vector3.one;
                     // Note: We previously flipped X scale here to fix mirroring, but this was a workaround.
                     // The correct fix is to use OpenMW's rotation conversion (negated axes) in PlaceStatics.cs
                     
@@ -1292,6 +1297,7 @@ namespace ESMSharp.NIF
                 
                 // Create root GameObject for skeleton
                 GameObject skeletonRoot = new GameObject(System.IO.Path.GetFileNameWithoutExtension(filename));
+                // Root stays at identity - coordinate system conversion applied to bones individually
                 skeletonRoot.transform.rotation = Quaternion.identity;
                 
                 // Skeleton files are in Morrowind units, same as static objects
@@ -1339,31 +1345,18 @@ namespace ESMSharp.NIF
             Matrix4x4 morrowindRotation = (Matrix4x4)node.Rotation;
             float morrowindScale = node.Scale;
             
-            // Convert Morrowind coordinate system to Unity
-            // Morrowind: +X East, +Y Up, +Z North (right-handed)
-            // Unity: +X East, +Y Up, +Z South (left-handed)
-            // Rotation: Negate Y and Z axes (convert right-handed to left-handed)
-            // Translation: Negate Z coordinate
+            // Convert Morrowind coordinate system (left-handed, Z-up) to Unity (left-handed, Y-up)
+            // Morrowind: X=East, Y=North, Z=Up
+            // Unity: X=East, Y=Up, Z=South
+            // Conversion: X stays X, Y becomes -Z, Z becomes Y
             
-            // Convert translation: negate Z
-            Vector3 unityTranslation = new Vector3(
-                morrowindTranslation.x,
-                morrowindTranslation.y,
-                -morrowindTranslation.z
-            );
+            // Convert translation
+            Vector3 unityTranslation = ConvertMorrowindTranslationToUnity(morrowindTranslation);
             
-            // Convert rotation matrix: negate Y and Z columns (right-handed to left-handed)
-            Matrix4x4 unityRotationMatrix = new Matrix4x4(
-                new Vector4(morrowindRotation.m00, morrowindRotation.m01, -morrowindRotation.m02, 0),
-                new Vector4(morrowindRotation.m10, morrowindRotation.m11, -morrowindRotation.m12, 0),
-                new Vector4(-morrowindRotation.m20, -morrowindRotation.m21, morrowindRotation.m22, 0),
-                new Vector4(0, 0, 0, 1)
-            );
+            // Convert rotation (Z-up to Y-up)
+            Quaternion unityRotation = ConvertMorrowindRotationToUnity(morrowindRotation);
             
-            // Extract quaternion from rotation matrix
-            Quaternion unityRotation = unityRotationMatrix.rotation;
-            
-            // Scale is uniform (single float in NIF)
+            // Scale is uniform (single float in NIF) - no coordinate system change needed for scale
             Vector3 unityScale = new Vector3(morrowindScale, morrowindScale, morrowindScale);
             
             // Check if this is the root node (parentWorldTransform is null)
@@ -1451,6 +1444,97 @@ namespace ESMSharp.NIF
         }
         
         /// <summary>
+        /// Converts a transform from Morrowind's coordinate system (left-handed, Z-up) to Unity's (left-handed, Y-up)
+        /// Morrowind: X=East, Y=North, Z=Up (left-handed)
+        /// Unity: X=East, Y=Up, Z=South (left-handed)
+        /// Conversion: Rotate -90 degrees around X axis (Z-up to Y-up), then flip Y scale to fix mirroring
+        /// The Y scale flip is needed because the coordinate system conversion causes mirroring
+        /// </summary>
+        private Matrix4x4 ConvertMorrowindTransformToUnity(Matrix4x4 morrowindTransform)
+        {
+            // Morrowind to Unity coordinate system conversion:
+            // X stays X (East)
+            // Y (North) becomes -Z (South)
+            // Z (Up) becomes Y (Up)
+            // This is a -90 degree rotation around X axis
+            
+            // Create the coordinate system conversion matrix (Z-up to Y-up)
+            // This rotates -90 degrees around X: Y -> Z, Z -> -Y
+            Matrix4x4 zUpToYUp = Matrix4x4.Rotate(Quaternion.Euler(-90f, 0f, 0f));
+            
+            // Apply conversion: Unity transform = conversion * Morrowind transform
+            Matrix4x4 converted = zUpToYUp * morrowindTransform;
+            
+            // Fix mirroring: Flip Y scale (since we converted Z-up to Y-up, the original Z inversion becomes Y inversion)
+            // Extract scale from the converted transform
+            Vector3 scale = new Vector3(
+                new Vector3(converted.m00, converted.m01, converted.m02).magnitude,
+                new Vector3(converted.m10, converted.m11, converted.m12).magnitude,
+                new Vector3(converted.m20, converted.m21, converted.m22).magnitude
+            );
+            
+            // Flip Y scale to fix mirroring (this replaces the old negative Z scale workaround)
+            scale.y = -scale.y;
+            
+            // Reconstruct the transform with flipped Y scale
+            // Extract rotation and translation
+            Vector3 translation = new Vector3(converted.m03, converted.m13, converted.m23);
+            
+            // When we flip Y scale, we also need to flip Y translation to maintain correct positioning
+            // This ensures child meshes are positioned at the correct height
+            translation.y = -translation.y;
+            
+            // Normalize rotation columns to get pure rotation
+            Vector3 col0 = new Vector3(converted.m00, converted.m01, converted.m02).normalized;
+            Vector3 col1 = new Vector3(converted.m10, converted.m11, converted.m12).normalized;
+            Vector3 col2 = new Vector3(converted.m20, converted.m21, converted.m22).normalized;
+            
+            // Rebuild matrix with flipped Y scale
+            Matrix4x4 result = Matrix4x4.identity;
+            result.m00 = col0.x * scale.x; result.m01 = col0.y * scale.x; result.m02 = col0.z * scale.x;
+            result.m10 = col1.x * scale.y; result.m11 = col1.y * scale.y; result.m12 = col1.z * scale.y;
+            result.m20 = col2.x * scale.z; result.m21 = col2.y * scale.z; result.m22 = col2.z * scale.z;
+            result.m03 = translation.x; result.m13 = translation.y; result.m23 = translation.z;
+            
+            return result;
+        }
+        
+        /// <summary>
+        /// Converts a translation vector from Morrowind's coordinate system to Unity's
+        /// Morrowind: X=East, Y=North, Z=Up
+        /// Unity: X=East, Y=Up, Z=South
+        /// Note: Translation doesn't need Y flip - only scale/rotation transforms need it
+        /// </summary>
+        private Vector3 ConvertMorrowindTranslationToUnity(Vector3 morrowindTranslation)
+        {
+            // X stays X (East)
+            // Y (North) becomes -Z (South)
+            // Z (Up) becomes Y (Up)
+            return new Vector3(
+                morrowindTranslation.x,      // East stays East
+                morrowindTranslation.z,       // Up becomes Up
+                -morrowindTranslation.y       // North becomes South (negated)
+            );
+        }
+        
+        /// <summary>
+        /// Converts a rotation matrix from Morrowind's coordinate system to Unity's
+        /// Applies the Z-up to Y-up rotation conversion
+        /// Note: Rotation doesn't need Y flip - the coordinate conversion handles it
+        /// </summary>
+        private Quaternion ConvertMorrowindRotationToUnity(Matrix4x4 morrowindRotation)
+        {
+            // Create coordinate system conversion rotation (-90 degrees around X)
+            Quaternion zUpToYUp = Quaternion.Euler(-90f, 0f, 0f);
+            
+            // Convert Morrowind rotation matrix to quaternion
+            Quaternion morrowindQuat = morrowindRotation.rotation;
+            
+            // Apply conversion: Unity rotation = conversion * Morrowind rotation
+            return zUpToYUp * morrowindQuat;
+        }
+        
+        /// <summary>
         /// Builds a transform matrix from an NiAVObject's transform components
         /// Uses proper matrix composition: Translation * Rotation * Scale (separate matrices)
         /// This prevents scale from being mixed with rotation, which can cause reflection issues
@@ -1519,16 +1603,21 @@ namespace ESMSharp.NIF
             if (node == null)
                 return;
             
-            // Note: We could log node scales here if needed for debugging
+            // Build transform for this node (still in Morrowind coordinate system)
+            Matrix4x4 nodeTransformMorrowind = BuildTransformMatrix(node);
             
-            // If parentTransform is default (identity), this is the root node - ignore its transform
-            // Otherwise, accumulate this node's transform with the parent transform
-            // (Similar to Blender's "discard_root_transforms" - root transform is ignored, child transforms are applied)
-            // OpenMW uses OSG's scene graph where child transforms are relative to parent
-            // We accumulate: parentTransform * childTransform (parent applied first, then child)
-            Matrix4x4 nodeTransform = parentTransform == default(Matrix4x4) 
-                ? Matrix4x4.identity  // Root node: ignore its transform
-                : parentTransform * BuildTransformMatrix(node);  // Child node: accumulate transform (parent * child)
+            // Convert node transform to Unity coordinate system
+            // Use the same conversion for both render and collision meshes since they share the same hierarchy
+            Matrix4x4 nodeTransformUnity = ConvertMorrowindTransformToUnity(nodeTransformMorrowind);
+            
+            // Accumulate transform: if parentTransform is identity, use nodeTransform
+            // Otherwise, combine parent and node transforms (parent * node)
+            // Note: parentTransform should already be in Unity coordinate system if it came from a parent node
+            // If parentTransform is default (identity), it means we're at the root
+            // Root node transform is typically ignored for meshes, but we convert it anyway for consistency
+            Matrix4x4 nodeTransformAccumulated = parentTransform == default(Matrix4x4)
+                ? Matrix4x4.identity  // Root node: ignore its transform (as per OpenMW convention)
+                : parentTransform * nodeTransformUnity;  // Child node: accumulate transform (parent * child)
             
             // Process children
             if (node.Children != null)
@@ -1542,14 +1631,14 @@ namespace ESMSharp.NIF
                     if (childNode != null)
                     {
                         // Pass accumulated transform to child nodes, preserve collision flag, increment depth
-                        ExtractMeshesFromNode(childNode, meshes, textures, material, nifFile, nodeTransform, isCollision, depth + 1);
+                        ExtractMeshesFromNode(childNode, meshes, textures, material, nifFile, nodeTransformAccumulated, isCollision, depth + 1);
                     }
                     
                     var triShape = childRef.Object as Niflib.NiTriShape;
                     if (triShape != null)
                     {
                         // Apply accumulated parent transform to the mesh, mark as collision if needed
-                        ExtractMeshFromTriShape(triShape, meshes, textures, material, nifFile, nodeTransform, isCollision);
+                        ExtractMeshFromTriShape(triShape, meshes, textures, material, nifFile, nodeTransformAccumulated, isCollision);
                     }
                 }
             }
@@ -1601,71 +1690,88 @@ namespace ESMSharp.NIF
             NIFMesh mesh = new NIFMesh();
             mesh.Name = triShape.Name != null ? triShape.Name.Value : "";
             
+            // Check for texturing property early - if mesh has no textures, it's likely a collision mesh
+            // This allows us to process it correctly during vertex extraction (before vertices are processed)
+            var texturingPropEarly = ResolveProperty(triShape, typeof(Niflib.NiTexturingProperty)) as Niflib.NiTexturingProperty;
+            bool hasNoTextures = (texturingPropEarly == null || texturingPropEarly.TextureCount == 0 || texturingPropEarly.BaseTexture == null || texturingPropEarly.BaseTexture.Source == null);
+            
+            // If mesh has no textures and wasn't explicitly marked as collision, treat it as collision mesh
+            // This ensures meshes with no textures get the correct vertex processing (Z scale flip for collision)
+            if (!isCollision && hasNoTextures)
+            {
+                isCollision = true;
+            }
+            
             // Build transform for this NiTriShape (it's also a NiAVObject, so it has Translation/Rotation/Scale)
-            Matrix4x4 triShapeTransform = BuildTransformMatrix(triShape);
+            Matrix4x4 triShapeTransformMorrowind = BuildTransformMatrix(triShape);
+            
+            // Convert to Unity coordinate system
+            // Use the same conversion for both render and collision meshes since they share the same hierarchy
+            Matrix4x4 triShapeTransformUnity = ConvertMorrowindTransformToUnity(triShapeTransformMorrowind);
             
             // Combine with parent transform: parentTransform * triShapeTransform
             // If parentTransform is default (identity), just use triShapeTransform
-            // OpenMW applies transforms through the scene graph, so we accumulate them here
-            Matrix4x4 morrowindTransform = parentTransform == default(Matrix4x4) 
-                ? triShapeTransform 
-                : parentTransform * triShapeTransform;
+            // Note: parentTransform should already be in Unity coordinate system if it came from ExtractMeshesFromNode
+            Matrix4x4 unityTransform = parentTransform == default(Matrix4x4) 
+                ? triShapeTransformUnity 
+                : parentTransform * triShapeTransformUnity;
             
             // Check for reflection (negative determinant) in the upper-left 3x3 matrix
             // This indicates a handedness flip that needs correction
-            float determinant = morrowindTransform.m00 * (morrowindTransform.m11 * morrowindTransform.m22 - morrowindTransform.m21 * morrowindTransform.m12)
-                              - morrowindTransform.m01 * (morrowindTransform.m10 * morrowindTransform.m22 - morrowindTransform.m20 * morrowindTransform.m12)
-                              + morrowindTransform.m02 * (morrowindTransform.m10 * morrowindTransform.m21 - morrowindTransform.m20 * morrowindTransform.m11);
+            float determinant = unityTransform.m00 * (unityTransform.m11 * unityTransform.m22 - unityTransform.m21 * unityTransform.m12)
+                              - unityTransform.m01 * (unityTransform.m10 * unityTransform.m22 - unityTransform.m20 * unityTransform.m12)
+                              + unityTransform.m02 * (unityTransform.m10 * unityTransform.m21 - unityTransform.m20 * unityTransform.m11);
             
-            // Standard right-hand coordinate system conversion: Morrowind (Y-up) to Unity (Y-up)
-            // Rotate -90 degrees around X axis to convert from Morrowind's coordinate system
-            Quaternion coordSystemRotation = Quaternion.Euler(-90f, 0f, 0f);
-            
-            // If determinant is negative, we have a reflection - need to flip one axis to correct it
-            // We'll flip Z scale to correct the reflection
-            Matrix4x4 correctedTransform = morrowindTransform;
-            if (determinant < 0)
-            {
-                // Apply Z scale flip to correct the reflection
-                Matrix4x4 zFlip = Matrix4x4.Scale(new Vector3(1f, 1f, -1f));
-                correctedTransform = zFlip * morrowindTransform;
-            }
+            // Check for reflection (negative determinant) - this indicates a handedness flip
+            // Instead of flipping Z scale (which causes render issues), we'll handle it by reversing triangle winding
+            // The coordinate system conversion should handle the scale correctly without needing negative Z scale
+            Matrix4x4 correctedTransform = unityTransform;
+            // Note: We no longer flip Z scale here - the coordinate conversion should handle it correctly
+            // If there's a reflection, we'll just reverse triangle winding order
             
             // Convert vertices from niflib Vector3 to Unity Vector3
-            // Apply corrected Morrowind transforms first, then coordinate system conversion
+            // Apply Unity transform (already includes coordinate system conversion from Z-up to Y-up)
+            // Render meshes: Apply +90° rotation around X and Y scale flip
+            // Collision meshes: May need different handling (render meshes are perfect, don't change them)
+            Quaternion zUpToYUpRotation = Quaternion.Euler(90f, 0f, 0f);
             mesh.Vertices = new List<Vector3>();
             foreach (var v in shapeData.Vertices)
             {
                 Vector3 vertex = new Vector3(v.x, v.y, v.z);
-                // Apply corrected Morrowind transform first (in Morrowind coordinate space)
-                Vector3 morrowindTransformed = correctedTransform.MultiplyPoint3x4(vertex);
-                // Then apply coordinate system conversion (rotate -90 degrees around X)
-                Vector3 unityVertex = coordSystemRotation * morrowindTransformed;
+                // Apply Unity transform (includes coordinate system conversion)
+                Vector3 unityVertex = correctedTransform.MultiplyPoint3x4(vertex);
+                
+                if (isCollision)
+                {
+                    // Collision meshes: Apply +180° rotation around X axis
+                    Quaternion xRotation = Quaternion.Euler(180f, 0f, 0f);
+                    unityVertex = xRotation * unityVertex;
+                }
+                else
+                {
+                    // Render meshes: Apply +90° rotation around X to ensure Y is up (not Z)
+                    unityVertex = zUpToYUpRotation * unityVertex;
+                    // Apply Y scale flip at vertex level to fix mirroring (instead of GameObject level)
+                    unityVertex = new Vector3(unityVertex.x, -unityVertex.y, unityVertex.z);
+                }
+                
                 mesh.Vertices.Add(unityVertex);
             }
             
             // Convert triangles
-            // If we corrected a reflection (negative determinant), reverse winding order
-            bool reverseWinding = (determinant < 0);
+            // Render meshes: Reverse winding order (Z-up to Y-up with Y scale flip requires reversed winding)
+            // Collision meshes: May need different winding order depending on their coordinate conversion
             if (shapeData.HasTriangles && shapeData.Triangles != null)
             {
                 mesh.Triangles = new List<int>();
                 foreach (var tri in shapeData.Triangles)
                 {
                     // Triangle class has X, Y, Z as ushort properties
-                    if (reverseWinding)
-                    {
-                        // Reverse winding order to fix backface culling after reflection correction
-                        mesh.Triangles.Add((int)tri.X);
-                        mesh.Triangles.Add((int)tri.Z);
-                        mesh.Triangles.Add((int)tri.Y);
-                    }
-                    else
-                    {
-                        mesh.Triangles.Add((int)tri.X);
-                        mesh.Triangles.Add((int)tri.Y);
-                        mesh.Triangles.Add((int)tri.Z);
-                    }
+                    // Both render and collision meshes use the same winding order reversal
+                    // Reverse winding order: X, Z, Y instead of X, Y, Z
+                    mesh.Triangles.Add((int)tri.X);
+                    mesh.Triangles.Add((int)tri.Z);
+                    mesh.Triangles.Add((int)tri.Y);
                 }
             }
             
@@ -1675,9 +1781,9 @@ namespace ESMSharp.NIF
             if (shapeData.HasNormals && shapeData.Normals != null)
             {
                 mesh.Normals = new List<Vector3>();
-                // For normals, we only need rotation (and uniform scale if present)
-                // Extract rotation/scale matrix from correctedTransform (upper-left 3x3)
-                Matrix4x4 rotationScaleMatrix = correctedTransform;
+                // For normals, we only need rotation/scale (no translation)
+                // Extract rotation/scale matrix from unityTransform (upper-left 3x3)
+                Matrix4x4 rotationScaleMatrix = unityTransform;
                 // Remove translation (set bottom row to 0,0,0,1)
                 rotationScaleMatrix.m03 = 0f;
                 rotationScaleMatrix.m13 = 0f;
@@ -1686,10 +1792,24 @@ namespace ESMSharp.NIF
                 foreach (var n in shapeData.Normals)
                 {
                     Vector3 normal = new Vector3(n.x, n.y, n.z);
-                    // Apply corrected Morrowind rotation and scale (no translation) using MultiplyVector
-                    Vector3 morrowindNormal = rotationScaleMatrix.MultiplyVector(normal);
-                    // Then apply coordinate system conversion rotation
-                    Vector3 unityNormal = coordSystemRotation * morrowindNormal;
+                    // Apply Unity rotation and scale (no translation) using MultiplyVector
+                    // This already includes coordinate system conversion
+                    Vector3 unityNormal = rotationScaleMatrix.MultiplyVector(normal);
+                    
+                    if (isCollision)
+                    {
+                        // Collision meshes: Apply +180° rotation around X axis to match vertex conversion
+                        Quaternion xRotation = Quaternion.Euler(180f, 0f, 0f);
+                        unityNormal = xRotation * unityNormal;
+                    }
+                    else
+                    {
+                        // Render meshes: Apply additional +90° rotation around X to match vertex conversion
+                        unityNormal = zUpToYUpRotation * unityNormal;
+                        // Apply Y scale flip at vertex level to match vertex conversion (instead of GameObject level)
+                        unityNormal = new Vector3(unityNormal.x, -unityNormal.y, unityNormal.z);
+                    }
+                    
                     // Normalize to maintain unit length
                     unityNormal.Normalize();
                     mesh.Normals.Add(unityNormal);
@@ -1728,7 +1848,8 @@ namespace ESMSharp.NIF
             Dictionary<string, NIFTexture> meshTextures = new Dictionary<string, NIFTexture>();
             NIFMaterial meshMaterial = new NIFMaterial();
             
-            var texturingProp = ResolveProperty(triShape, typeof(Niflib.NiTexturingProperty)) as Niflib.NiTexturingProperty;
+            // Use the texturing property we already checked earlier (or check again if needed)
+            var texturingProp = texturingPropEarly ?? (ResolveProperty(triShape, typeof(Niflib.NiTexturingProperty)) as Niflib.NiTexturingProperty);
             if (texturingProp != null)
             {
                 //UnityEngine.Debug.Log($"Found NiTexturingProperty for mesh '{mesh.Name}' (via ResolveProperty), TextureCount={texturingProp.TextureCount}");

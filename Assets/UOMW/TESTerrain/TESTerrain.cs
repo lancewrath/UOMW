@@ -78,7 +78,7 @@ namespace ESMSharp.TES3Terrain
             #else
             // In builds, import settings are already baked in, so this is a no-op
             // The settings should have been applied during development/editor time
-            #endif
+        #endif
         }
 
         public bool ConvertDDSToPNG(byte[] ddsData, string outputPngPath)
@@ -401,7 +401,7 @@ namespace ESMSharp.TES3Terrain
             // Determine the preferred ESM cache directory (use _esm if available, otherwise first loaded)
             string preferredESMName = _esm;
             if (string.IsNullOrEmpty(preferredESMName) && loadedESMs.Length > 0)
-            {
+                {
                 preferredESMName = System.IO.Path.GetFileNameWithoutExtension(loadedESMs[0]);
             }
 
@@ -420,14 +420,14 @@ namespace ESMSharp.TES3Terrain
                         textureName = names.primary.TrimEnd('\0', ' ', '\t', '\r', '\n');
                         textureName = textureName.Replace("\0", "");
                         textureName = textureName.Trim();
-                    }
+                                }
                     if (string.IsNullOrEmpty(textureName) && !string.IsNullOrEmpty(names.fallback))
-                    {
+                                {
                         textureName = names.fallback.TrimEnd('\0', ' ', '\t', '\r', '\n');
                         textureName = textureName.Replace("\0", "");
                         textureName = textureName.Trim();
-                    }
-                    
+                            }
+                            
                     if (string.IsNullOrEmpty(textureName))
                     {
                                 failedCount++;
@@ -438,7 +438,7 @@ namespace ESMSharp.TES3Terrain
                     // Try each ESM cache directory until we find or successfully extract the texture
                     TESLTextureLibrary.TextureEntry textureEntry = null;
                     string targetESMName = preferredESMName;
-                    
+                            
                     // First, try the preferred ESM
                     string textureDir = System.IO.Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Textures", targetESMName);
                     System.IO.Directory.CreateDirectory(textureDir);
@@ -452,12 +452,12 @@ namespace ESMSharp.TES3Terrain
                         ConvertDDSToPNG,
                         SetTextureImportSettings
                     );
-                    
+                            
                     // If not found in preferred ESM, try other ESMs
                     if (textureEntry == null)
-                    {
+                            {
                         foreach (string esmFilename in loadedESMs)
-                        {
+                                {
                             string esmName = System.IO.Path.GetFileNameWithoutExtension(esmFilename);
                             if (esmName.Equals(targetESMName, StringComparison.OrdinalIgnoreCase))
                                 continue; // Already tried
@@ -474,9 +474,9 @@ namespace ESMSharp.TES3Terrain
                                 ConvertDDSToPNG,
                                 #if UNITY_EDITOR
                                 SetTextureImportSettings
-                                #else
+                                        #else
                                 null
-                                #endif
+                                        #endif
                             );
                             
                             if (textureEntry != null)
@@ -485,7 +485,7 @@ namespace ESMSharp.TES3Terrain
                     }
                     
                     if (textureEntry != null && textureEntry.Texture != null)
-                    {
+                                    {
                         loadedCount++;
                                         }
                                         else
@@ -1462,7 +1462,7 @@ namespace ESMSharp.TES3Terrain
                             string preferredTextureDir = System.IO.Path.Combine(Application.dataPath, "StreamingAssets", "Data", "UOMW", "Cache", "Textures", preferredESMName);
                             texturePath = FindTextureInCacheDirectories(preferredTextureDir, namesToTry, vtexIndex);
                             if (texturePath != null)
-                            {
+                                {
                                 foundBaseName = System.IO.Path.GetFileName(texturePath);
                             }
                         }
@@ -1471,7 +1471,7 @@ namespace ESMSharp.TES3Terrain
                         if (texturePath == null)
                         {
                             foreach (string esmFilename in loadedESMs)
-                            {
+                        {
                                 string esmName = System.IO.Path.GetFileNameWithoutExtension(esmFilename);
                                 // Skip if we already checked this one
                                 if (string.Equals(esmName, preferredESMName, StringComparison.OrdinalIgnoreCase))
@@ -3888,17 +3888,17 @@ namespace ESMSharp.TES3Terrain
                         if (globalHeightsValid[y][x])
                         {
                             writtenPixelCount++;
-                            float h = globalHeights[y][x];
-                            // Normalize: min maps to 0.0 (black), max maps to 1.0 (white)
-                            float heightValue = (h - globalMinHeight) / globalHeightRange;
-                            heightValue = Mathf.Clamp01(heightValue);
-                            
-                            // Convert to 16-bit (0-65535)
-                            ushort rawHeightValue = (ushort)(heightValue * 65535.0f);
-                            
-                            // Write as little-endian (LSB first, then MSB)
-                            rawBytes[byteIndex++] = (byte)(rawHeightValue & 0xFF);        // LSB
-                            rawBytes[byteIndex++] = (byte)((rawHeightValue >> 8) & 0xFF); // MSB
+                        float h = globalHeights[y][x];
+                        // Normalize: min maps to 0.0 (black), max maps to 1.0 (white)
+                        float heightValue = (h - globalMinHeight) / globalHeightRange;
+                        heightValue = Mathf.Clamp01(heightValue);
+                        
+                        // Convert to 16-bit (0-65535)
+                        ushort rawHeightValue = (ushort)(heightValue * 65535.0f);
+                        
+                        // Write as little-endian (LSB first, then MSB)
+                        rawBytes[byteIndex++] = (byte)(rawHeightValue & 0xFF);        // LSB
+                        rawBytes[byteIndex++] = (byte)((rawHeightValue >> 8) & 0xFF); // MSB
                         }
                         else
                         {

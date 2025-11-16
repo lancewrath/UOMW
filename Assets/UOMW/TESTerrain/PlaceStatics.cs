@@ -849,15 +849,17 @@ namespace ESMSharp.TES3Terrain
                         instanceObj.name = objectId.objectId.TrimEnd('\0');
                     }
                     
+                    // DISABLED: Coordinate system conversion should now handle this at NIF loading level
+                    // If models appear mirrored or wrong orientation, re-enable these fixes:
                     // Apply reflection fix: negate Z scale and negate Yaw (same as statics)
-                    Vector3 instanceCurrentScale = instanceObj.transform.localScale;
-                    instanceObj.transform.localScale = new Vector3(instanceCurrentScale.x, instanceCurrentScale.y, -instanceCurrentScale.z);
-                    
+                    // Vector3 instanceCurrentScale = instanceObj.transform.localScale;
+                    // instanceObj.transform.localScale = new Vector3(instanceCurrentScale.x, instanceCurrentScale.y, -instanceCurrentScale.z);
+                    // 
                     // Negate Yaw (Y rotation)
-                    Vector3 instanceEuler = instanceObj.transform.rotation.eulerAngles;
-                    float instanceYaw = instanceEuler.y;
-                    if (instanceYaw > 180f) instanceYaw -= 360f;
-                    instanceObj.transform.rotation = Quaternion.Euler(instanceEuler.x, -instanceYaw, instanceEuler.z);
+                    // Vector3 instanceEuler = instanceObj.transform.rotation.eulerAngles;
+                    // float instanceYaw = instanceEuler.y;
+                    // if (instanceYaw > 180f) instanceYaw -= 360f;
+                    // instanceObj.transform.rotation = Quaternion.Euler(instanceEuler.x, -instanceYaw, instanceEuler.z);
                     
                     // Add LOD component
                     AddLODToObject(instanceObj);
@@ -928,15 +930,17 @@ namespace ESMSharp.TES3Terrain
                     treeModel.name = objectId.objectId.TrimEnd('\0');
                 }
                 
+                // DISABLED: Coordinate system conversion should now handle this at NIF loading level
+                // If models appear mirrored or wrong orientation, re-enable these fixes:
                 // Apply reflection fix: negate Z scale and negate Yaw (same as statics)
-                Vector3 currentScale = treeModel.transform.localScale;
-                treeModel.transform.localScale = new Vector3(currentScale.x, currentScale.y, -currentScale.z);
-                
+                // Vector3 currentScale = treeModel.transform.localScale;
+                // treeModel.transform.localScale = new Vector3(currentScale.x, currentScale.y, -currentScale.z);
+                // 
                 // Negate Yaw (Y rotation)
-                Vector3 euler = treeModel.transform.rotation.eulerAngles;
-                float yaw = euler.y;
-                if (yaw > 180f) yaw -= 360f;
-                treeModel.transform.rotation = Quaternion.Euler(euler.x, -yaw, euler.z);
+                // Vector3 euler = treeModel.transform.rotation.eulerAngles;
+                // float yaw = euler.y;
+                // if (yaw > 180f) yaw -= 360f;
+                // treeModel.transform.rotation = Quaternion.Euler(euler.x, -yaw, euler.z);
                 
                 // Add LOD component
                 AddLODToObject(treeModel);
@@ -991,13 +995,14 @@ namespace ESMSharp.TES3Terrain
                     if (objectId != null && !string.IsNullOrEmpty(objectId.objectId))
                         instanceObj.name = objectId.objectId.TrimEnd('\0');
                     
-                    Vector3 currentScaleLocal = instanceObj.transform.localScale;
-                    instanceObj.transform.localScale = new Vector3(currentScaleLocal.x, currentScaleLocal.y, -currentScaleLocal.z);
-                    
-                    Vector3 euler = instanceObj.transform.rotation.eulerAngles;
-                    float yaw = euler.y;
-                    if (yaw > 180f) yaw -= 360f;
-                    instanceObj.transform.rotation = Quaternion.Euler(euler.x, -yaw, euler.z);
+                    // DISABLED: Coordinate system conversion should now handle this at NIF loading level
+                    // Vector3 currentScaleLocal = instanceObj.transform.localScale;
+                    // instanceObj.transform.localScale = new Vector3(currentScaleLocal.x, currentScaleLocal.y, -currentScaleLocal.z);
+                    // 
+                    // Vector3 euler = instanceObj.transform.rotation.eulerAngles;
+                    // float yaw = euler.y;
+                    // if (yaw > 180f) yaw -= 360f;
+                    // instanceObj.transform.rotation = Quaternion.Euler(euler.x, -yaw, euler.z);
                     
                     AddLODToObject(instanceObj);
                     if (parent != null)
@@ -1049,13 +1054,14 @@ namespace ESMSharp.TES3Terrain
                 if (objectId != null && !string.IsNullOrEmpty(objectId.objectId))
                     treeModel.name = objectId.objectId.TrimEnd('\0');
                 
-                Vector3 currentScaleLocal2 = treeModel.transform.localScale;
-                treeModel.transform.localScale = new Vector3(currentScaleLocal2.x, currentScaleLocal2.y, -currentScaleLocal2.z);
-                
-                Vector3 euler2 = treeModel.transform.rotation.eulerAngles;
-                float yaw2 = euler2.y;
-                if (yaw2 > 180f) yaw2 -= 360f;
-                treeModel.transform.rotation = Quaternion.Euler(euler2.x, -yaw2, euler2.z);
+                // DISABLED: Coordinate system conversion should now handle this at NIF loading level
+                // Vector3 currentScaleLocal2 = treeModel.transform.localScale;
+                // treeModel.transform.localScale = new Vector3(currentScaleLocal2.x, currentScaleLocal2.y, -currentScaleLocal2.z);
+                // 
+                // Vector3 euler2 = treeModel.transform.rotation.eulerAngles;
+                // float yaw2 = euler2.y;
+                // if (yaw2 > 180f) yaw2 -= 360f;
+                // treeModel.transform.rotation = Quaternion.Euler(euler2.x, -yaw2, euler2.z);
                 
                 AddLODToObject(treeModel);
                 if (parent != null)
@@ -1106,13 +1112,14 @@ namespace ESMSharp.TES3Terrain
                     if (objectId != null && !string.IsNullOrEmpty(objectId.objectId))
                         instanceObj.name = objectId.objectId.TrimEnd('\0');
                     
-                    Vector3 currentScaleLocal = instanceObj.transform.localScale;
-                    instanceObj.transform.localScale = new Vector3(currentScaleLocal.x, currentScaleLocal.y, -currentScaleLocal.z);
-                    
-                    Vector3 euler = instanceObj.transform.rotation.eulerAngles;
-                    float yaw = euler.y;
-                    if (yaw > 180f) yaw -= 360f;
-                    instanceObj.transform.rotation = Quaternion.Euler(euler.x, -yaw, euler.z);
+                    // DISABLED: Coordinate system conversion should now handle this at NIF loading level
+                    // Vector3 currentScaleLocal = instanceObj.transform.localScale;
+                    // instanceObj.transform.localScale = new Vector3(currentScaleLocal.x, currentScaleLocal.y, -currentScaleLocal.z);
+                    // 
+                    // Vector3 euler = instanceObj.transform.rotation.eulerAngles;
+                    // float yaw = euler.y;
+                    // if (yaw > 180f) yaw -= 360f;
+                    // instanceObj.transform.rotation = Quaternion.Euler(euler.x, -yaw, euler.z);
                     
                     MeshCollider collider = instanceObj.GetComponent<MeshCollider>();
                     if (collider != null)
@@ -1181,8 +1188,9 @@ namespace ESMSharp.TES3Terrain
                 if (objectId != null && !string.IsNullOrEmpty(objectId.objectId))
                     grassModel.name = objectId.objectId.TrimEnd('\0');
                 
-                Vector3 currentScaleLocal2 = grassModel.transform.localScale;
-                grassModel.transform.localScale = new Vector3(currentScaleLocal2.x, currentScaleLocal2.y, -currentScaleLocal2.z);
+                // DISABLED: Coordinate system conversion should now handle this at NIF loading level
+                // Vector3 currentScaleLocal2 = grassModel.transform.localScale;
+                // grassModel.transform.localScale = new Vector3(currentScaleLocal2.x, currentScaleLocal2.y, -currentScaleLocal2.z);
                 
                 Vector3 euler2 = grassModel.transform.rotation.eulerAngles;
                 float yaw2 = euler2.y;
@@ -1274,8 +1282,9 @@ namespace ESMSharp.TES3Terrain
                     if (parent != null)
                         instanceObj.transform.SetParent(parent, worldPositionStays: true);
                     
-                    Vector3 currentScale = instanceObj.transform.localScale;
-                    instanceObj.transform.localScale = new Vector3(currentScale.x, currentScale.y, -currentScale.z);
+                    // DISABLED: Coordinate system conversion should now handle this at NIF loading level
+                    // Vector3 currentScale = instanceObj.transform.localScale;
+                    // instanceObj.transform.localScale = new Vector3(currentScale.x, currentScale.y, -currentScale.z);
                     
                     Vector3 euler = instanceObj.transform.rotation.eulerAngles;
                     float yaw = euler.y;
@@ -1362,8 +1371,9 @@ namespace ESMSharp.TES3Terrain
                 if (parent != null)
                     modelObj.transform.SetParent(parent, worldPositionStays: true);
                 
-                Vector3 modelCurrentScale = modelObj.transform.localScale;
-                modelObj.transform.localScale = new Vector3(modelCurrentScale.x, modelCurrentScale.y, -modelCurrentScale.z);
+                // DISABLED: Coordinate system conversion should now handle this at NIF loading level
+                // Vector3 modelCurrentScale = modelObj.transform.localScale;
+                // modelObj.transform.localScale = new Vector3(modelCurrentScale.x, modelCurrentScale.y, -modelCurrentScale.z);
                 
                 Vector3 modelEuler = modelObj.transform.rotation.eulerAngles;
                 float modelYaw = modelEuler.y;
@@ -1512,10 +1522,11 @@ namespace ESMSharp.TES3Terrain
                         instanceObj.name = objectId.objectId.TrimEnd('\0');
                     }
                     
+                    // DISABLED: Coordinate system conversion should now handle this at NIF loading level
                     // Apply reflection fix: negate Z scale and negate Yaw (same as statics)
-                    Vector3 instanceCurrentScale = instanceObj.transform.localScale;
-                    instanceObj.transform.localScale = new Vector3(instanceCurrentScale.x, instanceCurrentScale.y, -instanceCurrentScale.z);
-                    
+                    // Vector3 instanceCurrentScale = instanceObj.transform.localScale;
+                    // instanceObj.transform.localScale = new Vector3(instanceCurrentScale.x, instanceCurrentScale.y, -instanceCurrentScale.z);
+                    // 
                     // Negate Yaw (Y rotation)
                     Vector3 instanceEuler = instanceObj.transform.rotation.eulerAngles;
                     float instanceYaw = instanceEuler.y;
@@ -1612,15 +1623,17 @@ namespace ESMSharp.TES3Terrain
                     grassModel.name = objectId.objectId.TrimEnd('\0');
                 }
                 
+                // DISABLED: Coordinate system conversion should now handle this at NIF loading level
+                // If models appear mirrored or wrong orientation, re-enable these fixes:
                 // Apply reflection fix: negate Z scale and negate Yaw (same as statics)
-                Vector3 currentScale = grassModel.transform.localScale;
-                grassModel.transform.localScale = new Vector3(currentScale.x, currentScale.y, -currentScale.z);
-                
+                // Vector3 currentScale = grassModel.transform.localScale;
+                // grassModel.transform.localScale = new Vector3(currentScale.x, currentScale.y, -currentScale.z);
+                // 
                 // Negate Yaw (Y rotation)
-                Vector3 euler = grassModel.transform.rotation.eulerAngles;
-                float yaw = euler.y;
-                if (yaw > 180f) yaw -= 360f;
-                grassModel.transform.rotation = Quaternion.Euler(euler.x, -yaw, euler.z);
+                // Vector3 euler = grassModel.transform.rotation.eulerAngles;
+                // float yaw = euler.y;
+                // if (yaw > 180f) yaw -= 360f;
+                // grassModel.transform.rotation = Quaternion.Euler(euler.x, -yaw, euler.z);
                 
                 // Ensure MeshCollider is a trigger (for interaction, doesn't block movement)
                 // Note: Triggers require convex MeshColliders
@@ -3030,10 +3043,11 @@ namespace ESMSharp.TES3Terrain
                     }
                     
                     // Fix reflection issues: negate Z scale and negate Yaw
+                    // DISABLED: Coordinate system conversion should now handle this at NIF loading level
                     // This must be done AFTER parenting to ensure it's applied to all objects
-                    Vector3 currentScale = instanceObj.transform.localScale;
-                    instanceObj.transform.localScale = new Vector3(currentScale.x, currentScale.y, -currentScale.z);
-                    
+                    // Vector3 currentScale = instanceObj.transform.localScale;
+                    // instanceObj.transform.localScale = new Vector3(currentScale.x, currentScale.y, -currentScale.z);
+                    // 
                     // Negate Yaw (Y rotation): extract Euler angles, negate Y, rebuild quaternion
                     Vector3 euler = instanceObj.transform.rotation.eulerAngles;
                     // Convert to -180 to 180 range for proper negation
@@ -3125,11 +3139,12 @@ namespace ESMSharp.TES3Terrain
                 }
                 
                 // Fix reflection issues: negate Z scale and negate Yaw
+                // DISABLED: Coordinate system conversion should now handle this at NIF loading level
                 // This must be done AFTER parenting to ensure it's applied to all objects
                 // Apply to this instance (the first one, which is also stored as template)
-                Vector3 modelCurrentScale = modelObj.transform.localScale;
-                modelObj.transform.localScale = new Vector3(modelCurrentScale.x, modelCurrentScale.y, -modelCurrentScale.z);
-                
+                // Vector3 modelCurrentScale = modelObj.transform.localScale;
+                // modelObj.transform.localScale = new Vector3(modelCurrentScale.x, modelCurrentScale.y, -modelCurrentScale.z);
+                // 
                 // Negate Yaw (Y rotation): extract Euler angles, negate Y, rebuild quaternion
                 Vector3 modelEuler = modelObj.transform.rotation.eulerAngles;
                 // Convert to -180 to 180 range for proper negation
@@ -3456,15 +3471,8 @@ namespace ESMSharp.TES3Terrain
                     skeletonModel.name = "Skeleton";
                     skeletonModel.transform.localScale = skeletonBaseScale * scaleMultiplier;
                     
-                    // Apply coordinate system fix: negate Z scale and invert yaw (same as static objects)
-                    // This fixes the skeleton being laid down with Z as up instead of Y
-                    Vector3 currentSkeletonScale = skeletonModel.transform.localScale;
-                    skeletonModel.transform.localScale = new Vector3(currentSkeletonScale.x, currentSkeletonScale.y, -currentSkeletonScale.z);
-                    
-                    Vector3 skeletonEuler = skeletonModel.transform.localRotation.eulerAngles;
-                    float skeletonYaw = skeletonEuler.y;
-                    if (skeletonYaw > 180f) skeletonYaw -= 360f;
-                    skeletonModel.transform.localRotation = Quaternion.Euler(skeletonEuler.x, -skeletonYaw, skeletonEuler.z);
+                    // Coordinate system conversion is now handled at the NIF loading level in CreateBoneHierarchy
+                    // No need for post-processing hacks here
                     
                     // Process skeleton to build bone hierarchy and find head bone
                     // Bones in skeleton files are NiNode objects that may be detected as collision meshes
@@ -3543,9 +3551,10 @@ namespace ESMSharp.TES3Terrain
                     }
                 }
 
+                // DISABLED: Coordinate system conversion should now handle this at NIF loading level
                 // Fix reflection issues
-                Vector3 currentScale = npcObj.transform.localScale;
-                npcObj.transform.localScale = new Vector3(currentScale.x, currentScale.y, -currentScale.z);
+                // Vector3 currentScale = npcObj.transform.localScale;
+                // npcObj.transform.localScale = new Vector3(currentScale.x, currentScale.y, -currentScale.z);
 
                 Vector3 euler = npcObj.transform.rotation.eulerAngles;
                 float yaw = euler.y;
@@ -3911,15 +3920,8 @@ namespace ESMSharp.TES3Terrain
                         skeletonModel.name = "Skeleton";
                         skeletonModel.transform.localScale = skeletonBaseScale * scaleMultiplier;
                         
-                        // Apply coordinate system fix: negate Z scale and invert yaw (same as static objects)
-                        // This fixes the skeleton being laid down with Z as up instead of Y
-                        Vector3 currentSkeletonScaleSync = skeletonModel.transform.localScale;
-                        skeletonModel.transform.localScale = new Vector3(currentSkeletonScaleSync.x, currentSkeletonScaleSync.y, -currentSkeletonScaleSync.z);
-                        
-                        Vector3 skeletonEulerSync = skeletonModel.transform.localRotation.eulerAngles;
-                        float skeletonYawSync = skeletonEulerSync.y;
-                        if (skeletonYawSync > 180f) skeletonYawSync -= 360f;
-                        skeletonModel.transform.localRotation = Quaternion.Euler(skeletonEulerSync.x, -skeletonYawSync, skeletonEulerSync.z);
+                        // Coordinate system conversion is now handled at the NIF loading level in CreateBoneHierarchy
+                        // No need for post-processing hacks here
                         
                         // Process skeleton to build bone hierarchy and find head bone
                         headBoneTransform = ProcessSkeletonBones(skeletonModel);
@@ -4082,9 +4084,10 @@ namespace ESMSharp.TES3Terrain
                 //
                 // For now, NPCs are placed as static meshes. Skinned mesh support will be added later.
 
+                // DISABLED: Coordinate system conversion should now handle this at NIF loading level
                 // Fix reflection issues: negate Z scale and negate Yaw (same as static objects)
-                Vector3 currentScale = npcObj.transform.localScale;
-                npcObj.transform.localScale = new Vector3(currentScale.x, currentScale.y, -currentScale.z);
+                // Vector3 currentScale = npcObj.transform.localScale;
+                // npcObj.transform.localScale = new Vector3(currentScale.x, currentScale.y, -currentScale.z);
 
                 Vector3 euler = npcObj.transform.rotation.eulerAngles;
                 float yaw = euler.y;
