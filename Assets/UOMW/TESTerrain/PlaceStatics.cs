@@ -819,10 +819,11 @@ namespace ESMSharp.TES3Terrain
                     );
                     
                     // Convert Morrowind rotation to Unity rotation (same as statics)
+                    // Invert X rotation (yaw -> X), keep Y and Z rotations as is
                     Quaternion instanceRotation = Quaternion.Euler(
-                        -refp.yaw * Mathf.Rad2Deg,    // Yaw -> X
-                        -refp.pitch * Mathf.Rad2Deg,  // Pitch -> Y
-                        -refp.roll * Mathf.Rad2Deg    // Roll -> Z
+                        refp.yaw * Mathf.Rad2Deg,     // Yaw -> X (inverted)
+                        -refp.pitch * Mathf.Rad2Deg,  // Pitch -> Y (unchanged)
+                        -refp.roll * Mathf.Rad2Deg    // Roll -> Z (unchanged)
                     );
                     
                     // Set position, rotation, scale BEFORE parenting
@@ -900,10 +901,11 @@ namespace ESMSharp.TES3Terrain
                 );
                 
                 // Convert Morrowind rotation to Unity rotation (same as statics)
+                // Invert X rotation (yaw -> X), keep Y and Z rotations as is
                 Quaternion unityRotation = Quaternion.Euler(
-                    -refp.yaw * Mathf.Rad2Deg,    // Yaw -> X
-                    -refp.pitch * Mathf.Rad2Deg,  // Pitch -> Y
-                    -refp.roll * Mathf.Rad2Deg    // Roll -> Z
+                    refp.yaw * Mathf.Rad2Deg,     // Yaw -> X (inverted)
+                    -refp.pitch * Mathf.Rad2Deg,  // Pitch -> Y (unchanged)
+                    -refp.roll * Mathf.Rad2Deg    // Roll -> Z (unchanged)
                 );
                 
                 // Set position and rotation BEFORE parenting
@@ -983,7 +985,8 @@ namespace ESMSharp.TES3Terrain
                     float instanceScaledY = refp.z * TESGlobals.MORROWIND_TO_STATIC_SCALE;
                     
                     Vector3 instancePosition = new Vector3(instanceScaledX, instanceScaledY, instanceScaledZ);
-                    Quaternion instanceRotation = Quaternion.Euler(-refp.yaw * Mathf.Rad2Deg, -refp.pitch * Mathf.Rad2Deg, -refp.roll * Mathf.Rad2Deg);
+                    // Invert X rotation (yaw -> X), keep Y and Z rotations as is
+                    Quaternion instanceRotation = Quaternion.Euler(refp.yaw * Mathf.Rad2Deg, -refp.pitch * Mathf.Rad2Deg, -refp.roll * Mathf.Rad2Deg);
                     
                     instanceObj.transform.position = instancePosition;
                     instanceObj.transform.rotation = instanceRotation;
@@ -1042,7 +1045,8 @@ namespace ESMSharp.TES3Terrain
                 float scaledY = refp.z * TESGlobals.MORROWIND_TO_STATIC_SCALE;
                 
                 Vector3 unityPosition = new Vector3(scaledX, scaledY, scaledZ);
-                Quaternion unityRotation = Quaternion.Euler(-refp.yaw * Mathf.Rad2Deg, -refp.pitch * Mathf.Rad2Deg, -refp.roll * Mathf.Rad2Deg);
+                // Invert X rotation (yaw -> X), keep Y and Z rotations as is
+                Quaternion unityRotation = Quaternion.Euler(refp.yaw * Mathf.Rad2Deg, -refp.pitch * Mathf.Rad2Deg, -refp.roll * Mathf.Rad2Deg);
                 
                 treeModel.transform.position = unityPosition;
                 treeModel.transform.rotation = unityRotation;
@@ -1100,7 +1104,8 @@ namespace ESMSharp.TES3Terrain
                     float instanceScaledY = refp.z * TESGlobals.MORROWIND_TO_STATIC_SCALE;
                     
                     Vector3 instancePosition = new Vector3(instanceScaledX, instanceScaledY, instanceScaledZ);
-                    Quaternion instanceRotation = Quaternion.Euler(-refp.yaw * Mathf.Rad2Deg, -refp.pitch * Mathf.Rad2Deg, -refp.roll * Mathf.Rad2Deg);
+                    // Invert X rotation (yaw -> X), keep Y and Z rotations as is
+                    Quaternion instanceRotation = Quaternion.Euler(refp.yaw * Mathf.Rad2Deg, -refp.pitch * Mathf.Rad2Deg, -refp.roll * Mathf.Rad2Deg);
                     
                     instanceObj.transform.position = instancePosition;
                     instanceObj.transform.rotation = instanceRotation;
@@ -1176,7 +1181,8 @@ namespace ESMSharp.TES3Terrain
                 float scaledY = refp.z * TESGlobals.MORROWIND_TO_STATIC_SCALE;
                 
                 Vector3 unityPosition = new Vector3(scaledX, scaledY, scaledZ);
-                Quaternion unityRotation = Quaternion.Euler(-refp.yaw * Mathf.Rad2Deg, -refp.pitch * Mathf.Rad2Deg, -refp.roll * Mathf.Rad2Deg);
+                // Invert X rotation (yaw -> X), keep Y and Z rotations as is
+                Quaternion unityRotation = Quaternion.Euler(refp.yaw * Mathf.Rad2Deg, -refp.pitch * Mathf.Rad2Deg, -refp.roll * Mathf.Rad2Deg);
                 
                 grassModel.transform.position = unityPosition;
                 grassModel.transform.rotation = unityRotation;
@@ -1252,7 +1258,8 @@ namespace ESMSharp.TES3Terrain
                     float scaledY = refp.z * TESGlobals.MORROWIND_TO_STATIC_SCALE;
                     
                     Vector3 unityPosition = new Vector3(scaledX, scaledY, scaledZ);
-                    Quaternion unityRotation = Quaternion.Euler(-refp.yaw * Mathf.Rad2Deg, -refp.pitch * Mathf.Rad2Deg, -refp.roll * Mathf.Rad2Deg);
+                    // Invert X rotation (yaw -> X), keep Y and Z rotations as is
+                Quaternion unityRotation = Quaternion.Euler(refp.yaw * Mathf.Rad2Deg, -refp.pitch * Mathf.Rad2Deg, -refp.roll * Mathf.Rad2Deg);
                     
                     instanceObj.transform.position = unityPosition;
                     instanceObj.transform.rotation = unityRotation;
@@ -1337,7 +1344,8 @@ namespace ESMSharp.TES3Terrain
                 float scaledY2 = refp.z * TESGlobals.MORROWIND_TO_STATIC_SCALE;
                 
                 Vector3 unityPosition2 = new Vector3(scaledX2, scaledY2, scaledZ2);
-                Quaternion unityRotation2 = Quaternion.Euler(-refp.yaw * Mathf.Rad2Deg, -refp.pitch * Mathf.Rad2Deg, -refp.roll * Mathf.Rad2Deg);
+                // Invert X rotation (yaw -> X), keep Y and Z rotations as is
+                Quaternion unityRotation2 = Quaternion.Euler(refp.yaw * Mathf.Rad2Deg, -refp.pitch * Mathf.Rad2Deg, -refp.roll * Mathf.Rad2Deg);
                 
                 modelObj.transform.position = unityPosition2;
                 modelObj.transform.rotation = unityRotation2;
@@ -1492,10 +1500,11 @@ namespace ESMSharp.TES3Terrain
                     );
                     
                     // Convert Morrowind rotation to Unity rotation (same as statics)
+                    // Invert X rotation (yaw -> X), keep Y and Z rotations as is
                     Quaternion instanceRotation = Quaternion.Euler(
-                        -refp.yaw * Mathf.Rad2Deg,    // Yaw -> X
-                        -refp.pitch * Mathf.Rad2Deg,  // Pitch -> Y
-                        -refp.roll * Mathf.Rad2Deg    // Roll -> Z
+                        refp.yaw * Mathf.Rad2Deg,     // Yaw -> X (inverted)
+                        -refp.pitch * Mathf.Rad2Deg,  // Pitch -> Y (unchanged)
+                        -refp.roll * Mathf.Rad2Deg    // Roll -> Z (unchanged)
                     );
                     
                     // Set position, rotation, scale BEFORE parenting
@@ -1593,10 +1602,11 @@ namespace ESMSharp.TES3Terrain
                 );
                 
                 // Convert Morrowind rotation to Unity rotation (same as statics)
+                // Invert X rotation (yaw -> X), keep Y and Z rotations as is
                 Quaternion unityRotation = Quaternion.Euler(
-                    -refp.yaw * Mathf.Rad2Deg,    // Yaw -> X
-                    -refp.pitch * Mathf.Rad2Deg,  // Pitch -> Y
-                    -refp.roll * Mathf.Rad2Deg    // Roll -> Z
+                    refp.yaw * Mathf.Rad2Deg,     // Yaw -> X (inverted)
+                    -refp.pitch * Mathf.Rad2Deg,  // Pitch -> Y (unchanged)
+                    -refp.roll * Mathf.Rad2Deg    // Roll -> Z (unchanged)
                 );
                 
                 // Set position and rotation BEFORE parenting
@@ -2972,11 +2982,10 @@ namespace ESMSharp.TES3Terrain
                 // OpenMW applies: roll around -Z, then yaw around -Y, then pitch around -X
                 // Unity Euler applies rotations in Z, X, Y order (intrinsic rotations)
                 // User reports things rotated on X when they should be on Y - this suggests pitch/yaw might be swapped
-                // Or the axis mapping needs adjustment. Let's try swapping pitch and yaw:
                 Quaternion unityRotation = Quaternion.Euler(
-                    -refp.yaw * Mathf.Rad2Deg,    // Yaw -> X (swapped with pitch, negated to match OpenMW's -Y axis)
-                    -refp.pitch * Mathf.Rad2Deg,  // Pitch -> Y (swapped with yaw, negated to match OpenMW's -X axis)
-                    -refp.roll * Mathf.Rad2Deg    // Roll -> Z (negated to match OpenMW's -Z axis)
+                    -refp.yaw * Mathf.Rad2Deg,    // Yaw -> X
+                    -refp.pitch * Mathf.Rad2Deg,  // Pitch -> Y
+                    -refp.roll * Mathf.Rad2Deg    // Roll -> Z
                 );
                 
                 // Check if we've already loaded this model (mesh instancing) - use global library
@@ -3352,7 +3361,8 @@ namespace ESMSharp.TES3Terrain
                 float scaledY = refp.z * TESGlobals.MORROWIND_TO_STATIC_SCALE;
 
                 Vector3 unityPosition = new Vector3(scaledX, scaledY, scaledZ);
-                Quaternion unityRotation = Quaternion.Euler(-refp.yaw * Mathf.Rad2Deg, -refp.pitch * Mathf.Rad2Deg, -refp.roll * Mathf.Rad2Deg);
+                // Invert X rotation (yaw -> X), keep Y and Z rotations as is
+                Quaternion unityRotation = Quaternion.Euler(refp.yaw * Mathf.Rad2Deg, -refp.pitch * Mathf.Rad2Deg, -refp.roll * Mathf.Rad2Deg);
 
                 npcObj = new GameObject($"{npcEntry.DisplayName ?? npcId} (NPC)");
                 npcObj.transform.position = unityPosition;
@@ -3847,10 +3857,11 @@ namespace ESMSharp.TES3Terrain
 
                 // Convert Morrowind rotation to Unity rotation
                 // Same rotation conversion as PlaceStaticObject
+                // Invert X rotation (yaw -> X), keep Y and Z rotations as is
                 Quaternion unityRotation = Quaternion.Euler(
-                    -refp.yaw * Mathf.Rad2Deg,    // Yaw -> X
-                    -refp.pitch * Mathf.Rad2Deg,  // Pitch -> Y
-                    -refp.roll * Mathf.Rad2Deg    // Roll -> Z
+                    refp.yaw * Mathf.Rad2Deg,     // Yaw -> X (inverted)
+                    -refp.pitch * Mathf.Rad2Deg,  // Pitch -> Y (unchanged)
+                    -refp.roll * Mathf.Rad2Deg    // Roll -> Z (unchanged)
                 );
 
                 // Create parent GameObject for the NPC (will hold all body parts)

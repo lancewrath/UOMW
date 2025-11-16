@@ -1352,12 +1352,15 @@ namespace ESMSharp.NIF
             
             // Convert translation
             Vector3 unityTranslation = ConvertMorrowindTranslationToUnity(morrowindTranslation);
+            // Apply Y translation flip to match mesh conversion (same as ConvertMorrowindTransformToUnity does)
+            unityTranslation.y = -unityTranslation.y;
             
             // Convert rotation (Z-up to Y-up)
             Quaternion unityRotation = ConvertMorrowindRotationToUnity(morrowindRotation);
             
-            // Scale is uniform (single float in NIF) - no coordinate system change needed for scale
-            Vector3 unityScale = new Vector3(morrowindScale, morrowindScale, morrowindScale);
+            // Scale is uniform (single float in NIF)
+            // Apply Y scale flip to match mesh conversion (same as ConvertMorrowindTransformToUnity does)
+            Vector3 unityScale = new Vector3(morrowindScale, -morrowindScale, morrowindScale);
             
             // Check if this is the root node (parentWorldTransform is null)
             // Root node typically has identity transform, but we should still apply it if it has one
