@@ -92,7 +92,7 @@ namespace ESMSharp.TES3
             
             if (isUpdate)
             {
-                Debug.Log($"TESMWScriptManager: Updated script '{scriptName}' (from {sourceESM ?? "unknown"})");
+                // Debug.Log($"TESMWScriptManager: Updated script '{scriptName}' (from {sourceESM ?? "unknown"})"); // Commented out for performance
             }
             else
             {

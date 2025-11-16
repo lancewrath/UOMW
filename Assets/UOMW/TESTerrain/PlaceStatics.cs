@@ -461,7 +461,7 @@ namespace ESMSharp.TES3Terrain
                         // Create a new SubRecordCellANAM with cleaned name (or update the existing one if possible)
                         // For now, we'll clean it when we use it in PlaceNPC
                         // Debug: Log ANAM content to help diagnose NPC detection issues
-                        UnityEngine.Debug.Log($"PlaceCellStatics: Found ANAM record with NPC ID: '{currentANAM.name}' (cleaned: '{cleanedANAM}') (Object ID: '{currentObjectID?.objectId ?? "null"}')");
+                        // UnityEngine.Debug.Log($"PlaceCellStatics: Found ANAM record with NPC ID: '{currentANAM.name}' (cleaned: '{cleanedANAM}') (Object ID: '{currentObjectID?.objectId ?? "null"}')"); // Commented out for performance
                     }
                     else if (currentANAM != null)
                     {
@@ -1786,7 +1786,34 @@ namespace ESMSharp.TES3Terrain
                 }
             }
             
-            // Always check for LIGH (light) record - even if STAT/CONT was found, the object ID might still be a light
+            // If still not found, try to look up DOOR record
+            if (string.IsNullOrEmpty(modelFilename))
+            {
+                TESDoorManager.DoorEntry doorEntry = TESDoorManager.GetDoor(modelId);
+                if (doorEntry == null && !string.Equals(modelId, cleanedModelId, StringComparison.OrdinalIgnoreCase))
+                {
+                    doorEntry = TESDoorManager.GetDoor(cleanedModelId);
+                }
+                
+                if (doorEntry != null && !string.IsNullOrEmpty(doorEntry.ModelFilename))
+                {
+                    // Clean the model filename from door
+                    modelFilename = doorEntry.ModelFilename.TrimEnd('\0', ' ', '\t', '\r', '\n');
+                    modelFilename = modelFilename.Replace("\0", "");
+                    modelFilename = modelFilename.Trim();
+                    
+                    // Normalize path separators (replace backslashes with forward slashes)
+                    modelFilename = modelFilename.Replace('\\', '/');
+                    
+                    // Extract just the filename (strip any subdirectory paths)
+                    modelFilename = Path.GetFileName(modelFilename);
+                    
+                    // Normalize entire filename to lowercase for consistency with cache files
+                    modelFilename = modelFilename.ToLowerInvariant();
+                }
+            }
+            
+            // Always check for LIGH (light) record - even if STAT/CONT/DOOR was found, the object ID might still be a light
             // This ensures lights get the TESLight component attached even if they have a STAT record
             TESLightManager.LightEntry foundLightEntry = null; // Store for later component attachment
             // Use the cleaned modelId (which should match how it's stored in TESLightManager)
@@ -1874,7 +1901,7 @@ namespace ESMSharp.TES3Terrain
 
             if (string.IsNullOrEmpty(modelFilename))
             {
-                UnityEngine.Debug.LogWarning($"Could not find model for ID '{modelId}' (checked STAT records, CONT records, LIGH records, and cache directory)");
+                UnityEngine.Debug.LogWarning($"Could not find model for ID '{modelId}' (checked STAT records, CONT records, DOOR records, LIGH records, and cache directory)");
                 switch (objectType)
                 {
                     case ObjectType.Trees: counts.FailedTrees++; break;
@@ -2056,7 +2083,34 @@ namespace ESMSharp.TES3Terrain
                 }
             }
             
-            // Always check for LIGH (light) record - even if STAT/CONT was found, the object ID might still be a light
+            // If still not found, try to look up DOOR record
+            if (string.IsNullOrEmpty(modelFilename))
+            {
+                TESDoorManager.DoorEntry doorEntry = TESDoorManager.GetDoor(modelId);
+                if (doorEntry == null && !string.Equals(modelId, cleanedModelId, StringComparison.OrdinalIgnoreCase))
+                {
+                    doorEntry = TESDoorManager.GetDoor(cleanedModelId);
+                }
+                
+                if (doorEntry != null && !string.IsNullOrEmpty(doorEntry.ModelFilename))
+                {
+                    // Clean the model filename from door
+                    modelFilename = doorEntry.ModelFilename.TrimEnd('\0', ' ', '\t', '\r', '\n');
+                    modelFilename = modelFilename.Replace("\0", "");
+                    modelFilename = modelFilename.Trim();
+                    
+                    // Normalize path separators (replace backslashes with forward slashes)
+                    modelFilename = modelFilename.Replace('\\', '/');
+                    
+                    // Extract just the filename (strip any subdirectory paths)
+                    modelFilename = Path.GetFileName(modelFilename);
+                    
+                    // Normalize entire filename to lowercase for consistency with cache files
+                    modelFilename = modelFilename.ToLowerInvariant();
+                }
+            }
+            
+            // Always check for LIGH (light) record - even if STAT/CONT/DOOR was found, the object ID might still be a light
             // This ensures lights get the TESLight component attached even if they have a STAT record
             TESLightManager.LightEntry foundLightEntry = null; // Store for later component attachment
             // Use the cleaned modelId (which should match how it's stored in TESLightManager)
@@ -2149,7 +2203,7 @@ namespace ESMSharp.TES3Terrain
 
             if (string.IsNullOrEmpty(modelFilename))
             {
-                UnityEngine.Debug.LogWarning($"Could not find model for ID '{modelId}' (checked STAT records, CONT records, LIGH records, and cache directory)");
+                UnityEngine.Debug.LogWarning($"Could not find model for ID '{modelId}' (checked STAT records, CONT records, DOOR records, LIGH records, and cache directory)");
                 failedCount++;
                 return;
             }
@@ -3103,6 +3157,34 @@ namespace ESMSharp.TES3Terrain
                 yield return LoadBodyPartModelCoroutine(hairPart.ModelFilename, hairPart.BodyPartId, (loadedModel) => hairModel = loadedModel);
             }
             
+            // Load equipment models (armor/clothing) - must be done before try-catch since yield return can't be in try-catch
+            List<GameObject> equipmentModels = new List<GameObject>();
+            List<string> equipmentNames = new List<string>();
+            if (npcEntry != null && npcEntry.Inventory != null && npcEntry.Inventory.Count > 0)
+            {
+                Dictionary<uint, TESEquipmentLibrary.EquipmentEntry> equippedItems = TESEquipmentLibrary.GetEquippedItems(npcEntry.Inventory);
+                
+                foreach (var kvp in equippedItems)
+                {
+                    uint slotType = kvp.Key;
+                    TESEquipmentLibrary.EquipmentEntry equipment = kvp.Value;
+                    
+                    if (equipment == null || string.IsNullOrEmpty(equipment.ModelFilename))
+                        continue;
+                    
+                    // Load equipment model
+                    GameObject equipmentModel = null;
+                    yield return LoadNIFModelCoroutine(equipment.ModelFilename, false, (loadedModel) => equipmentModel = loadedModel);
+                    
+                    if (equipmentModel != null)
+                    {
+                        equipmentModels.Add(equipmentModel);
+                        string slotName = GetEquipmentSlotName(slotType);
+                        equipmentNames.Add($"{slotName} ({equipment.DisplayName ?? equipment.EquipmentId})");
+                    }
+                }
+            }
+            
             try
             {
                 // Attach skeleton if loaded
@@ -3145,6 +3227,16 @@ namespace ESMSharp.TES3Terrain
                     counts.PlacedNPCs += placedCount;
                     counts.FailedNPCs += failedCount;
                     yield break;
+                }
+
+                // Attach equipment models that were loaded before the try block
+                for (int i = 0; i < equipmentModels.Count; i++)
+                {
+                    if (equipmentModels[i] != null)
+                    {
+                        equipmentModels[i].transform.SetParent(parentTransform, false);
+                        equipmentModels[i].name = equipmentNames[i];
+                    }
                 }
 
                 // Fix reflection issues
@@ -3589,6 +3681,34 @@ namespace ESMSharp.TES3Terrain
                     }
                 }
                 
+                // Load and attach equipment (armor/clothing) - synchronous version
+                if (npcEntry != null && npcEntry.Inventory != null && npcEntry.Inventory.Count > 0)
+                {
+                    Dictionary<uint, TESEquipmentLibrary.EquipmentEntry> equippedItems = TESEquipmentLibrary.GetEquippedItems(npcEntry.Inventory);
+                    
+                    foreach (var kvp in equippedItems)
+                    {
+                        uint slotType = kvp.Key;
+                        TESEquipmentLibrary.EquipmentEntry equipment = kvp.Value;
+                        
+                        if (equipment == null || string.IsNullOrEmpty(equipment.ModelFilename))
+                            continue;
+                        
+                        // Load equipment model
+                        GameObject equipmentModel = LoadNIFModel(equipment.ModelFilename, false);
+                        
+                        if (equipmentModel != null)
+                        {
+                            // Attach to skeleton if available, otherwise to NPC root
+                            equipmentModel.transform.SetParent(parentTransform, false);
+                            
+                            // Name based on equipment slot
+                            string slotName = GetEquipmentSlotName(slotType);
+                            equipmentModel.name = $"{slotName} ({equipment.DisplayName ?? equipment.EquipmentId})";
+                        }
+                    }
+                }
+                
                 // Check if we loaded at least one body part
                 if (loadedPartsCount == 0)
                 {
@@ -3670,6 +3790,36 @@ namespace ESMSharp.TES3Terrain
             else
             {
                 return "baseanim.nif";
+            }
+        }
+        
+        /// <summary>
+        /// Gets a human-readable name for an equipment slot type
+        /// </summary>
+        private string GetEquipmentSlotName(uint slotType)
+        {
+            switch (slotType)
+            {
+                case 0x0001: return "Head";
+                case 0x0002: return "Hair";
+                case 0x0004: return "Neck";
+                case 0x0008: return "Chest";
+                case 0x0010: return "Groin";
+                case 0x0020: return "Skirt";
+                case 0x0040: return "RightHand";
+                case 0x0080: return "LeftHand";
+                case 0x0100: return "RightWrist";
+                case 0x0200: return "LeftWrist";
+                case 0x0400: return "Shield";
+                case 0x0800: return "RightForearm";
+                case 0x1000: return "LeftForearm";
+                case 0x2000: return "RightUpperArm";
+                case 0x4000: return "LeftUpperArm";
+                case 0x8000: return "RightFoot";
+                case 0x10000: return "LeftFoot";
+                case 0x20000: return "RightAnkle";
+                case 0x40000: return "LeftAnkle";
+                default: return "Equipment";
             }
         }
         

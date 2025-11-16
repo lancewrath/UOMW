@@ -438,7 +438,7 @@ namespace ESMSharp.TES3
             
             if (foundPath == null)
             {
-                Debug.Log($"TESLTextureLibrary: Texture '{baseName}' not found in cache directory");
+                // Debug.Log($"TESLTextureLibrary: Texture '{baseName}' not found in cache directory"); // Commented out for performance
             }
             
             // Step 3: If DDS/TGA found, convert to PNG
@@ -516,7 +516,7 @@ namespace ESMSharp.TES3
             // Step 4: If still not found, try extracting from BSA
             if (foundPath == null || !System.IO.File.Exists(foundPath))
             {
-                Debug.Log($"TESLTextureLibrary: Texture not found in cache, trying BSA extraction for: {baseName} (original: '{originalTextureName}')");
+                // Debug.Log($"TESLTextureLibrary: Texture not found in cache, trying BSA extraction for: {baseName} (original: '{originalTextureName}')"); // Commented out for performance
                 
                 // Get all file names from all BSAs for searching (matching old GatherLandTextures approach)
                 HashSet<string> allBSAFiles = TESBSALibrary.GetAllFileNames();

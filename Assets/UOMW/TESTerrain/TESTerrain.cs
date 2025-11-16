@@ -1379,7 +1379,7 @@ namespace ESMSharp.TES3Terrain
                         texture = cachedEntry.Texture;
                         texturePath = cachedEntry.Filename;
                         foundBaseName = System.IO.Path.GetFileName(texturePath);
-                        UnityEngine.Debug.Log($"Reusing cached texture from library (by VTEX {vtexIndex}): {cachedEntry.Filename}");
+                        // UnityEngine.Debug.Log($"Reusing cached texture from library (by VTEX {vtexIndex}): {cachedEntry.Filename}"); // Commented out for performance
                     }
                     
                     // Try both NAME and DATA values, and also try with common Morrowind texture prefixes
@@ -2398,7 +2398,7 @@ namespace ESMSharp.TES3Terrain
                 if (waterShader != null)
                 {
                     waterMaterial = new Material(waterShader);
-                    UnityEngine.Debug.Log($"Created water material using shader: {waterShader.name}");
+                    // UnityEngine.Debug.Log($"Created water material using shader: {waterShader.name}"); // Commented out for performance
                 }
                 else
                 {
@@ -2477,7 +2477,7 @@ namespace ESMSharp.TES3Terrain
                     waterMaterial.SetColor("_Color", Color.white);
                 }
                 
-                UnityEngine.Debug.Log($"Applied TESWater shader with water texture: {(waterTexture != null ? "Yes" : "No")}, normal map: {(waterNormalMap != null ? "Yes" : "No")}, foam: {(foamTexture != null ? "Yes" : "No")}");
+                // UnityEngine.Debug.Log($"Applied TESWater shader with water texture: {(waterTexture != null ? "Yes" : "No")}, normal map: {(waterNormalMap != null ? "Yes" : "No")}, foam: {(foamTexture != null ? "Yes" : "No")}"); // Commented out for performance
             }
             else if (waterMaterial.shader.name.Contains("Universal Render Pipeline"))
             {

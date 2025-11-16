@@ -359,6 +359,27 @@ namespace ESMSharp.TES3
                                 RecordClothing clothrecord = new RecordClothing();
                                 clothrecord.Deserialize(reader, name);
                                 mRecord = clothrecord;
+                                
+                                // Register clothing with TESEquipmentLibrary
+                                TESEquipmentLibrary.AddClothing(clothrecord, esmFilename);
+                                break;
+
+                            case "ARMO":
+                                RecordArmor armorrecord = new RecordArmor();
+                                armorrecord.Deserialize(reader, name);
+                                mRecord = armorrecord;
+                                
+                                // Register armor with TESEquipmentLibrary
+                                TESEquipmentLibrary.AddArmor(armorrecord, esmFilename);
+                                break;
+
+                            case "DOOR":
+                                RecordDoor doorrecord = new RecordDoor();
+                                doorrecord.Deserialize(reader, name);
+                                mRecord = doorrecord;
+                                
+                                // Register door with TESDoorManager
+                                TESDoorManager.AddDoor(doorrecord, esmFilename);
                                 break;
 
                             default:

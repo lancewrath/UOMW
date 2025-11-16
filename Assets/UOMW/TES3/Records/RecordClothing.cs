@@ -103,5 +103,6 @@ namespace ESMSharp.TES3
 
             _subrecords.Add(subrecord);
         }
+    
     }
 }

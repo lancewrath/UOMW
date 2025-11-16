@@ -69,7 +69,7 @@ namespace Niflib
 				UnityEngine.Debug.LogError($"niflib.net: Suspicious NumVertices value in NiMorphData at position {positionBeforeRead + 4}: {this.NumVertices} (0x{this.NumVertices:X8}). This suggests file misalignment.");
 			}
 			
-			UnityEngine.Debug.Log($"niflib.net: NiMorphData: NumMorphs={this.NumMorphs}, NumVertices={this.NumVertices}, RelativeTargets={this.RelativeTargets}, position={positionBeforeRead}");
+			// UnityEngine.Debug.Log($"niflib.net: NiMorphData: NumMorphs={this.NumMorphs}, NumVertices={this.NumVertices}, RelativeTargets={this.RelativeTargets}, position={positionBeforeRead}"); // Commented out for performance
 			
 			this.Morphs = new Morph[this.NumMorphs];
 			int num = 0;
@@ -78,7 +78,7 @@ namespace Niflib
 				long positionBeforeMorph = reader.BaseStream.Position;
 				this.Morphs[num] = new Morph(file, reader, this.NumVertices);
 				long positionAfterMorph = reader.BaseStream.Position;
-				UnityEngine.Debug.Log($"niflib.net: NiMorphData: Read morph {num + 1} of {this.NumMorphs} from position {positionBeforeMorph} to {positionAfterMorph} (size: {positionAfterMorph - positionBeforeMorph} bytes)");
+				// UnityEngine.Debug.Log($"niflib.net: NiMorphData: Read morph {num + 1} of {this.NumMorphs} from position {positionBeforeMorph} to {positionAfterMorph} (size: {positionAfterMorph - positionBeforeMorph} bytes)"); // Commented out for performance
 				num++;
 			}
 		}
