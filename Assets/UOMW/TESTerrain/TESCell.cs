@@ -10,7 +10,7 @@ namespace ESMSharp.TES3Terrain
     public class TESCell : MonoBehaviour
     {
         public RecordCell RecordCell { get; private set; }
-        public CellManager CellManager { get; private set; }
+        // CellManager is now static, no need for instance reference
         private Record[] _allRecords = null;
         private string _esm = "";
         private string _bsa = "";
@@ -18,10 +18,9 @@ namespace ESMSharp.TES3Terrain
         public bool staticsGenerated = false;
         public float vhgtHeight { get; private set; } = 0f; // VHGT height offset for this cell (cached for efficiency)
 
-        public void SetCell(RecordCell recordCell, CellManager cellManager, Record[] allRecords, string esm, string bsa, float vhgtHeight = 0f)
+        public void SetCell(RecordCell recordCell, Record[] allRecords, string esm, string bsa, float vhgtHeight = 0f)
         {
             RecordCell = recordCell;
-            CellManager = cellManager;
             _allRecords = allRecords;
             _esm = esm;
             _bsa = bsa;
@@ -64,7 +63,7 @@ namespace ESMSharp.TES3Terrain
 
             // Place statics for this cell only (coroutine version)
             //UnityEngine.Debug.Log($"TESCell: Generating statics for cell ({GetGridX()}, {GetGridY()})");
-            yield return StartCoroutine(placeStatics.PlaceCellStaticsCoroutine(RecordCell, _allRecords, CellManager, transform, terrain));
+            yield return StartCoroutine(placeStatics.PlaceCellStaticsCoroutine(RecordCell, _allRecords, transform, terrain));
 
             staticsGenerated = true;
         }

@@ -30,6 +30,12 @@ namespace ESMSharp.TES3Terrain
         /// Used when multithreading is enabled
         /// </summary>
         private Queue<System.Action> _pendingAsyncLoads = new Queue<System.Action>();
+        
+        /// <summary>
+        /// Cache of model IDs that have failed to load (to avoid repeated lookups)
+        /// Static so it's shared across all PlaceStatics instances
+        /// </summary>
+        private static HashSet<string> _failedModelLookups = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         // Distance-based LOD configuration (based on MWGE distant lands algorithm)
         // These values determine which quadtree/distance category objects are placed in
@@ -58,7 +64,7 @@ namespace ESMSharp.TES3Terrain
         /// Places large static structures (buildings, ruins, etc.) from CELL records
         /// Enhanced with distance-based categorization similar to MWGE distant lands
         /// </summary>
-        public void PlaceLargeStructures(Record[] records, CellManager cellManager = null, Transform parent = null)
+        public void PlaceLargeStructures(Record[] records, Transform parent = null)
         {
             // Track statistics
             int nearCount = 0, farCount = 0, veryFarCount = 0;
@@ -168,25 +174,25 @@ namespace ESMSharp.TES3Terrain
 
             // Second pass: place objects by category
             // For now, place all objects (we can add distance-based culling later)
-            PlaceObjects(records, cellManager, parent, ObjectType.LargeStructures);
+            PlaceObjects(records, parent, ObjectType.LargeStructures);
         }
 
         /// <summary>
         /// Places trees from CELL records as Unity terrain trees
         /// </summary>
-        public void PlaceTrees(Record[] records, CellManager cellManager = null, Terrain terrain = null)
+        public void PlaceTrees(Record[] records, Terrain terrain = null)
         {
             // Place trees as static meshes (not terrain tree instances)
             // Trees will be placed using the same logic as statics, but with SpeedTree shader
-            PlaceObjects(records, cellManager, null, ObjectType.Trees, terrain);
+            PlaceObjects(records, null, ObjectType.Trees, terrain);
         }
 
         /// <summary>
         /// Places grass from CELL records as Unity terrain details
         /// </summary>
-        public void PlaceGrass(Record[] records, CellManager cellManager = null, Terrain terrain = null)
+        public void PlaceGrass(Record[] records, Terrain terrain = null)
         {
-            PlaceObjects(records, cellManager, null, ObjectType.Grass, terrain);
+            PlaceObjects(records, null, ObjectType.Grass, terrain);
         }
 
         /// <summary>
@@ -255,13 +261,13 @@ namespace ESMSharp.TES3Terrain
         /// Places statics for a single cell only (for manual testing)
         /// Synchronous version - calls coroutine version internally
         /// </summary>
-        public void PlaceCellStatics(RecordCell cellRecord, Record[] allRecords, CellManager cellManager, Transform parent, Terrain terrain)
+        public void PlaceCellStatics(RecordCell cellRecord, Record[] allRecords, Transform parent, Terrain terrain)
         {
             // For synchronous calls, we need a MonoBehaviour to run the coroutine
             // Create a temporary helper object
             GameObject helperObj = new GameObject("PlaceStaticsHelper");
             PlaceStaticsCoroutineHelper helper = helperObj.AddComponent<PlaceStaticsCoroutineHelper>();
-            helper.StartCoroutine(PlaceCellStaticsCoroutine(cellRecord, allRecords, cellManager, parent, terrain, () =>
+            helper.StartCoroutine(PlaceCellStaticsCoroutine(cellRecord, allRecords, parent, terrain, () =>
             {
                 GameObject.Destroy(helperObj);
             }));
@@ -285,7 +291,7 @@ namespace ESMSharp.TES3Terrain
         /// <summary>
         /// Coroutine version of PlaceCellStatics for async model loading
         /// </summary>
-        public IEnumerator PlaceCellStaticsCoroutine(RecordCell cellRecord, Record[] allRecords, CellManager cellManager, Transform parent, Terrain terrain, System.Action onComplete = null)
+        public IEnumerator PlaceCellStaticsCoroutine(RecordCell cellRecord, Record[] allRecords, Transform parent, Terrain terrain, System.Action onComplete = null)
         {
             if (cellRecord == null || cellRecord.subRecords == null)
             {
@@ -350,12 +356,8 @@ namespace ESMSharp.TES3Terrain
                 }
             }
 
-            // Get cell GameObject
-            GameObject cellParent = null;
-            if (cellManager != null)
-            {
-                cellParent = cellManager.GetCell(cellGridX, cellGridY);
-            }
+            // Get cell GameObject from static CellManager
+            GameObject cellParent = CellManager.GetCell(cellGridX, cellGridY);
 
             // Process references in this cell only
             SubRecordCellFRMR currentFRMR = null;
@@ -608,7 +610,7 @@ namespace ESMSharp.TES3Terrain
         /// <summary>
         /// Internal method to place objects with filtering
         /// </summary>
-        private void PlaceObjects(Record[] records, CellManager cellManager = null, Transform parent = null, ObjectType objectType = ObjectType.LargeStructures, Terrain terrain = null)
+        private void PlaceObjects(Record[] records, Transform parent = null, ObjectType objectType = ObjectType.LargeStructures, Terrain terrain = null)
         {
             // Build a dictionary of STAT records by their NAME (model ID)
             Dictionary<string, RecordStat> statRecordsByName = new Dictionary<string, RecordStat>(StringComparer.OrdinalIgnoreCase);
@@ -718,11 +720,8 @@ namespace ESMSharp.TES3Terrain
                         cellGridY = data.gridY;
                         seenFirstDATA = true;
 
-                        // Get the cell GameObject from CellManager
-                        if (cellManager != null)
-                        {
-                            cellParent = cellManager.GetCell(cellGridX, cellGridY);
-                        }
+                        // Get the cell GameObject from static CellManager
+                        cellParent = CellManager.GetCell(cellGridX, cellGridY);
                         continue;
                     }
 
@@ -1700,10 +1699,23 @@ namespace ESMSharp.TES3Terrain
                 }
                 yield break;
             }
+            
+            // Check if this model ID has already failed to load (skip repeated lookups)
+            if (_failedModelLookups.Contains(modelId))
+            {
+                switch (objectType)
+                {
+                    case ObjectType.Trees: counts.FailedTrees++; break;
+                    case ObjectType.Grass: counts.FailedGrass++; break;
+                    case ObjectType.LargeStructures: counts.FailedStructures++; break;
+                }
+                yield break;
+            }
 
             // Check if this might be an NPC (quick check - if it's not in STAT records)
             string cleanedModelId = modelId; // Already cleaned above - this is the normalized ID
-            bool mightBeNPC = !statRecordsByName.ContainsKey(modelId) && !statRecordsByName.ContainsKey(cleanedModelId);
+            bool mightBeNPC = !TESStaticLibrary.HasStatic(modelId) && !TESStaticLibrary.HasStatic(cleanedModelId) && 
+                              !statRecordsByName.ContainsKey(modelId) && !statRecordsByName.ContainsKey(cleanedModelId);
             
             if (mightBeNPC)
             {
@@ -1728,8 +1740,32 @@ namespace ESMSharp.TES3Terrain
 
             string modelFilename = null;
 
-            // First, try to look up STAT record by name
-            if (statRecordsByName.ContainsKey(modelId))
+            // First, try to look up STAT record using TESStaticLibrary (pre-registered during ESM parsing)
+            TESStaticLibrary.StaticEntry staticEntry = TESStaticLibrary.GetStatic(modelId);
+            if (staticEntry == null && !string.Equals(modelId, cleanedModelId, StringComparison.OrdinalIgnoreCase))
+            {
+                staticEntry = TESStaticLibrary.GetStatic(cleanedModelId);
+            }
+            
+            if (staticEntry != null && !string.IsNullOrEmpty(staticEntry.ModelFilename))
+            {
+                // Get model filename from pre-registered static entry
+                modelFilename = staticEntry.ModelFilename;
+                
+                // Clean the model filename
+                modelFilename = modelFilename.TrimEnd('\0', ' ', '\t', '\r', '\n');
+                modelFilename = modelFilename.Replace("\0", "");
+                modelFilename = modelFilename.Trim();
+                
+                // Normalize path separators (replace backslashes with forward slashes)
+                modelFilename = modelFilename.Replace('\\', '/');
+                
+                // Extract just the filename (strip any subdirectory paths)
+                modelFilename = Path.GetFileName(modelFilename);
+            }
+            
+            // Fallback: If TESStaticLibrary lookup failed, try the old method (for backward compatibility)
+            if (string.IsNullOrEmpty(modelFilename) && statRecordsByName.ContainsKey(modelId))
             {
                 RecordStat statRecord = statRecordsByName[modelId];
                 foreach (SubRecords statSubrec in statRecord.subRecords)
@@ -1813,7 +1849,34 @@ namespace ESMSharp.TES3Terrain
                 }
             }
             
-            // Always check for LIGH (light) record - even if STAT/CONT/DOOR was found, the object ID might still be a light
+            // If still not found, try to look up ACTI (activator) record
+            if (string.IsNullOrEmpty(modelFilename))
+            {
+                TESActivatorLibrary.ActivatorEntry activatorEntry = TESActivatorLibrary.GetActivator(modelId);
+                if (activatorEntry == null && !string.Equals(modelId, cleanedModelId, StringComparison.OrdinalIgnoreCase))
+                {
+                    activatorEntry = TESActivatorLibrary.GetActivator(cleanedModelId);
+                }
+                
+                if (activatorEntry != null && !string.IsNullOrEmpty(activatorEntry.ModelFilename))
+                {
+                    // Clean the model filename from activator
+                    modelFilename = activatorEntry.ModelFilename.TrimEnd('\0', ' ', '\t', '\r', '\n');
+                    modelFilename = modelFilename.Replace("\0", "");
+                    modelFilename = modelFilename.Trim();
+                    
+                    // Normalize path separators (replace backslashes with forward slashes)
+                    modelFilename = modelFilename.Replace('\\', '/');
+                    
+                    // Extract just the filename (strip any subdirectory paths)
+                    modelFilename = Path.GetFileName(modelFilename);
+                    
+                    // Normalize entire filename to lowercase for consistency with cache files
+                    modelFilename = modelFilename.ToLowerInvariant();
+                }
+            }
+            
+            // Always check for LIGH (light) record - even if STAT/CONT/DOOR/ACTI was found, the object ID might still be a light
             // This ensures lights get the TESLight component attached even if they have a STAT record
             TESLightManager.LightEntry foundLightEntry = null; // Store for later component attachment
             // Use the cleaned modelId (which should match how it's stored in TESLightManager)
@@ -1901,7 +1964,14 @@ namespace ESMSharp.TES3Terrain
 
             if (string.IsNullOrEmpty(modelFilename))
             {
-                UnityEngine.Debug.LogWarning($"Could not find model for ID '{modelId}' (checked STAT records, CONT records, DOOR records, LIGH records, and cache directory)");
+                // Mark this model ID as failed to avoid repeated lookups
+                _failedModelLookups.Add(modelId);
+                
+                // Only log the first time we encounter this missing model (to reduce spam)
+                if (_failedModelLookups.Count <= 100 || _failedModelLookups.Count % 50 == 0)
+                {
+                    UnityEngine.Debug.LogWarning($"Could not find model for ID '{modelId}' (checked STAT records, CONT records, DOOR records, ACTI records, LIGH records, and cache directory). This will be cached to avoid repeated lookups.");
+                }
                 switch (objectType)
                 {
                     case ObjectType.Trees: counts.FailedTrees++; break;
@@ -1994,12 +2064,26 @@ namespace ESMSharp.TES3Terrain
             string modelId = objectId.objectId.TrimEnd('\0', ' ', '\t', '\r', '\n');
             modelId = modelId.Replace("\0", "");
             modelId = modelId.Trim();
+            
+            if (string.IsNullOrEmpty(modelId))
+            {
+                failedCount++;
+                return;
+            }
+            
+            // Check if this model ID has already failed to load (skip repeated lookups)
+            if (_failedModelLookups.Contains(modelId))
+            {
+                failedCount++;
+                return;
+            }
 
             // Check if this might be an NPC (quick check - if it's not in STAT records)
             // This is a performance optimization to avoid checking NPCs for every static
             // Also clean the modelId to remove null characters before checking
             string cleanedModelId = new string(modelId.Where(c => c != '\0').ToArray()).Trim();
-            bool mightBeNPC = !statRecordsByName.ContainsKey(modelId) && !statRecordsByName.ContainsKey(cleanedModelId);
+            bool mightBeNPC = !TESStaticLibrary.HasStatic(modelId) && !TESStaticLibrary.HasStatic(cleanedModelId) && 
+                              !statRecordsByName.ContainsKey(modelId) && !statRecordsByName.ContainsKey(cleanedModelId);
             
             // If it might be an NPC, check TESCharacterManager before trying STAT lookup
             if (mightBeNPC)
@@ -2023,8 +2107,32 @@ namespace ESMSharp.TES3Terrain
 
             string modelFilename = null;
 
-            // First, try to look up STAT record by name
-            if (statRecordsByName.ContainsKey(modelId))
+            // First, try to look up STAT record using TESStaticLibrary (pre-registered during ESM parsing)
+            TESStaticLibrary.StaticEntry staticEntry = TESStaticLibrary.GetStatic(modelId);
+            if (staticEntry == null && !string.Equals(modelId, cleanedModelId, StringComparison.OrdinalIgnoreCase))
+            {
+                staticEntry = TESStaticLibrary.GetStatic(cleanedModelId);
+            }
+            
+            if (staticEntry != null && !string.IsNullOrEmpty(staticEntry.ModelFilename))
+            {
+                // Get model filename from pre-registered static entry
+                modelFilename = staticEntry.ModelFilename;
+                
+                // Clean the model filename
+                modelFilename = modelFilename.TrimEnd('\0', ' ', '\t', '\r', '\n');
+                modelFilename = modelFilename.Replace("\0", "");
+                modelFilename = modelFilename.Trim();
+                
+                // Normalize path separators (replace backslashes with forward slashes)
+                modelFilename = modelFilename.Replace('\\', '/');
+                
+                // Extract just the filename (strip any subdirectory paths)
+                modelFilename = Path.GetFileName(modelFilename);
+            }
+            
+            // Fallback: If TESStaticLibrary lookup failed, try the old method (for backward compatibility)
+            if (string.IsNullOrEmpty(modelFilename) && statRecordsByName.ContainsKey(modelId))
             {
                 RecordStat statRecord = statRecordsByName[modelId];
 
@@ -2110,7 +2218,34 @@ namespace ESMSharp.TES3Terrain
                 }
             }
             
-            // Always check for LIGH (light) record - even if STAT/CONT/DOOR was found, the object ID might still be a light
+            // If still not found, try to look up ACTI (activator) record
+            if (string.IsNullOrEmpty(modelFilename))
+            {
+                TESActivatorLibrary.ActivatorEntry activatorEntry = TESActivatorLibrary.GetActivator(modelId);
+                if (activatorEntry == null && !string.Equals(modelId, cleanedModelId, StringComparison.OrdinalIgnoreCase))
+                {
+                    activatorEntry = TESActivatorLibrary.GetActivator(cleanedModelId);
+                }
+                
+                if (activatorEntry != null && !string.IsNullOrEmpty(activatorEntry.ModelFilename))
+                {
+                    // Clean the model filename from activator
+                    modelFilename = activatorEntry.ModelFilename.TrimEnd('\0', ' ', '\t', '\r', '\n');
+                    modelFilename = modelFilename.Replace("\0", "");
+                    modelFilename = modelFilename.Trim();
+                    
+                    // Normalize path separators (replace backslashes with forward slashes)
+                    modelFilename = modelFilename.Replace('\\', '/');
+                    
+                    // Extract just the filename (strip any subdirectory paths)
+                    modelFilename = Path.GetFileName(modelFilename);
+                    
+                    // Normalize entire filename to lowercase for consistency with cache files
+                    modelFilename = modelFilename.ToLowerInvariant();
+                }
+            }
+            
+            // Always check for LIGH (light) record - even if STAT/CONT/DOOR/ACTI was found, the object ID might still be a light
             // This ensures lights get the TESLight component attached even if they have a STAT record
             TESLightManager.LightEntry foundLightEntry = null; // Store for later component attachment
             // Use the cleaned modelId (which should match how it's stored in TESLightManager)
@@ -2203,7 +2338,14 @@ namespace ESMSharp.TES3Terrain
 
             if (string.IsNullOrEmpty(modelFilename))
             {
-                UnityEngine.Debug.LogWarning($"Could not find model for ID '{modelId}' (checked STAT records, CONT records, DOOR records, LIGH records, and cache directory)");
+                // Mark this model ID as failed to avoid repeated lookups
+                _failedModelLookups.Add(modelId);
+                
+                // Only log the first time we encounter this missing model (to reduce spam)
+                if (_failedModelLookups.Count <= 100 || _failedModelLookups.Count % 50 == 0)
+                {
+                    UnityEngine.Debug.LogWarning($"Could not find model for ID '{modelId}' (checked STAT records, CONT records, DOOR records, ACTI records, LIGH records, and cache directory). This will be cached to avoid repeated lookups.");
+                }
                 failedCount++;
                 return;
             }

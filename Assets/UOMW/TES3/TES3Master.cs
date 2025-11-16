@@ -18,7 +18,7 @@ namespace ESMSharp.TES3
     {
         TESTerrain testerrain = null;
         NIFModels nifModels = null;
-        CellManager cellManager = null;
+        // CellManager is now static, no need for instance reference
         
         // Cell bounds and max height (now retrieved from TESESMLibrary)
         public long MinCellX { get; private set; } = 0;
@@ -106,7 +106,7 @@ namespace ESMSharp.TES3
             
             nifModels = new NIFModels();
             nifModels.GatherModels(records, primaryBSA, primaryESM);
-            cellManager = CreateCells();
+            CreateCells(); // CellManager is now static
             
             // Get terrain object if it exists
             Terrain terrain = GameObject.FindFirstObjectByType<Terrain>();
@@ -229,8 +229,9 @@ namespace ESMSharp.TES3
 
         /// <summary>
         /// Creates cell GameObjects from CELL records (coroutine version with prioritization)
+        /// Uses static CellManager
         /// </summary>
-        public System.Collections.IEnumerator CreateCellsCoroutine(Transform parent, Vector3? priorityPosition, int cellsPerFrame, ESMSharp.TES3Terrain.CellManager cellManager)
+        public System.Collections.IEnumerator CreateCellsCoroutine(Transform parent, Vector3? priorityPosition, int cellsPerFrame)
         {
             Record[] records = TESESMLibrary.GetAllRecords();
             
@@ -238,13 +239,14 @@ namespace ESMSharp.TES3
             string primaryESM = loadedESMs.Length > 0 ? loadedESMs[0] : "Morrowind.esm";
             string primaryBSA = System.IO.Path.GetFileNameWithoutExtension(primaryESM) + ".bsa";
             
-            yield return cellManager.CreateCellsCoroutine(records, parent, primaryESM, primaryBSA, priorityPosition, cellsPerFrame);
+            yield return ESMSharp.TES3Terrain.CellManager.CreateCellsCoroutine(records, parent, primaryESM, primaryBSA, priorityPosition, cellsPerFrame);
         }
 
         /// <summary>
         /// Creates cell GameObjects from CELL records (synchronous version for backwards compatibility)
+        /// Uses static CellManager
         /// </summary>
-        public CellManager CreateCells(Transform parent = null)
+        public void CreateCells(Transform parent = null)
         {
             Record[] records = TESESMLibrary.GetAllRecords();
             
@@ -252,16 +254,14 @@ namespace ESMSharp.TES3
             string primaryESM = loadedESMs.Length > 0 ? loadedESMs[0] : "Morrowind.esm";
             string primaryBSA = System.IO.Path.GetFileNameWithoutExtension(primaryESM) + ".bsa";
             
-            ESMSharp.TES3Terrain.CellManager cellManager = new ESMSharp.TES3Terrain.CellManager();
-            cellManager.CreateCells(records, parent, primaryESM, primaryBSA);
-            
-            return cellManager;
+            ESMSharp.TES3Terrain.CellManager.CreateCells(records, parent, primaryESM, primaryBSA);
         }
 
         /// <summary>
         /// Places large static structures from CELL records onto the terrain
+        /// Uses static CellManager
         /// </summary>
-        public void PlaceLargeStructures(CellManager cellManager = null, Transform parent = null)
+        public void PlaceLargeStructures(Transform parent = null)
         {
             Record[] records = TESESMLibrary.GetAllRecords();
             
@@ -270,13 +270,14 @@ namespace ESMSharp.TES3
             string primaryBSA = System.IO.Path.GetFileNameWithoutExtension(primaryESM) + ".bsa";
             
             PlaceStatics placeStatics = new PlaceStatics(primaryESM, primaryBSA);
-            placeStatics.PlaceLargeStructures(records, cellManager, parent);
+            placeStatics.PlaceLargeStructures(records, parent);
         }
 
         /// <summary>
         /// Places trees from CELL records as Unity terrain trees
+        /// Uses static CellManager
         /// </summary>
-        public void PlaceTrees(CellManager cellManager = null)
+        public void PlaceTrees()
         {
             Record[] records = TESESMLibrary.GetAllRecords();
             
@@ -286,13 +287,14 @@ namespace ESMSharp.TES3
             
             Terrain terrain = GameObject.FindFirstObjectByType<Terrain>();
             PlaceStatics placeStatics = new PlaceStatics(primaryESM, primaryBSA);
-            placeStatics.PlaceTrees(records, cellManager, terrain);
+            placeStatics.PlaceTrees(records, terrain);
         }
 
         /// <summary>
         /// Places grass from CELL records as Unity terrain details
+        /// Uses static CellManager
         /// </summary>
-        public void PlaceGrass(CellManager cellManager = null)
+        public void PlaceGrass()
         {
             Record[] records = TESESMLibrary.GetAllRecords();
             
@@ -302,7 +304,7 @@ namespace ESMSharp.TES3
             
             Terrain terrain = GameObject.FindFirstObjectByType<Terrain>();
             PlaceStatics placeStatics = new PlaceStatics(primaryESM, primaryBSA);
-            placeStatics.PlaceGrass(records, cellManager, terrain);
+            placeStatics.PlaceGrass(records, terrain);
         }
 
     }

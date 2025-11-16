@@ -278,12 +278,18 @@ namespace ESMSharp.TES3
                                 RecordCell cellrecord = new RecordCell();
                                 cellrecord.Deserialize(reader, name);
                                 mRecord = cellrecord;
+                                
+                                // Register cell with TESCelLibrary
+                                TESCelLibrary.AddCell(cellrecord, esmFilename);
                                 break;
                                 
                             case "STAT":
                                 RecordStat statrecord = new RecordStat();
                                 statrecord.Deserialize(reader, name);
                                 mRecord = statrecord;
+                                
+                                // Register static with TESStaticLibrary
+                                TESStaticLibrary.AddStatic(statrecord, esmFilename);
                                 break;
 
                             case "GMST":
@@ -380,6 +386,17 @@ namespace ESMSharp.TES3
                                 
                                 // Register door with TESDoorManager
                                 TESDoorManager.AddDoor(doorrecord, esmFilename);
+                                break;
+
+
+                            case "ACTI":
+                                RecordActivator actirecord = new RecordActivator();
+                                actirecord.Deserialize(reader, name);
+                                mRecord = actirecord;
+
+                                // Register activator with TESActivatorLibrary
+                                TESActivatorLibrary.AddActivator(actirecord, esmFilename);
+
                                 break;
 
                             default:

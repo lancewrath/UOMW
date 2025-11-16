@@ -10,22 +10,24 @@ namespace ESMSharp.TES3Terrain
 {
     /// <summary>
     /// Manages CELL GameObjects with colliders and events
+    /// Static class for global cell management
     /// </summary>
-    public class CellManager
+    public static class CellManager
     {
-        private Dictionary<string, GameObject> _cells = new Dictionary<string, GameObject>();
-        private Dictionary<string, RecordCell> _cellRecords = new Dictionary<string, RecordCell>();
-        private Transform _parent = null;
-        private Record[] _allRecords = null;
-        private string _esm = "";
-        private string _bsa = "";
+        private static Dictionary<string, GameObject> _cells = new Dictionary<string, GameObject>();
+        private static Dictionary<string, RecordCell> _cellRecords = new Dictionary<string, RecordCell>();
+        private static Transform _parent = null;
+        private static Record[] _allRecords = null;
+        private static string _esm = "";
+        private static string _bsa = "";
 
         /// <summary>
         /// Creates cell GameObjects from CELL records (coroutine version)
         /// Only creates cells that have a matching LAND record
         /// Prioritizes cells near the player position
+        /// Uses pre-registered cells from TESCelLibrary for faster lookups
         /// </summary>
-        public IEnumerator CreateCellsCoroutine(Record[] records, Transform parent = null, string esm = "", string bsa = "", Vector3? priorityPosition = null, int cellsPerFrame = 15)
+        public static IEnumerator CreateCellsCoroutine(Record[] records, Transform parent = null, string esm = "", string bsa = "", Vector3? priorityPosition = null, int cellsPerFrame = 15)
         {
             _allRecords = records;
             _esm = esm;
@@ -62,52 +64,24 @@ namespace ESMSharp.TES3Terrain
             }
             _parent = cellsParent.transform;
 
-            // Collect all cells to create with their metadata
-            List<(RecordCell cell, int gridX, int gridY, bool isInterior, string cellName)> cellsToCreate = new List<(RecordCell, int, int, bool, string)>();
+            // Collect all cells to create with their metadata using TESCelLibrary (pre-registered during ESM parsing)
+            List<(TESCelLibrary.CellEntry cellEntry, RecordCell cellRecord)> cellsToCreate = new List<(TESCelLibrary.CellEntry, RecordCell)>();
 
-            foreach (Record rec in records)
+            // Use TESCelLibrary to get all cells (much faster than iterating through records)
+            foreach (var cellEntry in TESCelLibrary.GetAllCells())
             {
-                RecordCell cell = rec as RecordCell;
-                if (cell == null)
-                    continue;
-
-                if (cell.subRecords == null)
-                    continue;
-
-                // Extract cell data
-                string cellName = null;
-                int gridX = 0;
-                int gridY = 0;
-                bool isInterior = false;
-
-                foreach (SubRecords subrec in cell.subRecords)
-                {
-                    if (subrec == null)
-                        continue;
-
-                    if (subrec is SubRecordCellRGNN)
-                    {
-                        SubRecordCellRGNN rgnn = subrec as SubRecordCellRGNN;
-                        cellName = rgnn.name;
-                    }
-                    else if (subrec is SubRecordCellDATA)
-                    {
-                        SubRecordCellDATA data = subrec as SubRecordCellDATA;
-                        gridX = data.gridX;
-                        gridY = data.gridY;
-                        // Check if interior (flag 0x01)
-                        isInterior = (data.flags & 0x01) != 0;
-                    }
-                }
-
                 // Only create cells that have a matching LAND record (exterior cells only)
                 // This ensures cells match exactly with the heightmap
-                if (!isInterior && !landCellCoordinates.Contains((gridX, gridY)))
+                if (!cellEntry.IsInterior && !landCellCoordinates.Contains((cellEntry.GridX, cellEntry.GridY)))
                 {
                     continue; // Skip cells without LAND records
                 }
 
-                cellsToCreate.Add((cell, gridX, gridY, isInterior, cellName));
+                // Get the cell record from the entry
+                if (cellEntry.CellRecord != null)
+                {
+                    cellsToCreate.Add((cellEntry, cellEntry.CellRecord));
+                }
             }
 
             // Get priority position (player position or default to origin)
@@ -118,8 +92,8 @@ namespace ESMSharp.TES3Terrain
             // Sort cells by distance from priority position (closest first)
             cellsToCreate = cellsToCreate.OrderBy(c =>
             {
-                int dx = c.gridX - priorityCellX;
-                int dy = c.gridY - priorityCellY;
+                int dx = c.cellEntry.GridX - priorityCellX;
+                int dy = c.cellEntry.GridY - priorityCellY;
                 return dx * dx + dy * dy; // Distance squared (no need for sqrt)
             }).ToList();
 
@@ -129,29 +103,29 @@ namespace ESMSharp.TES3Terrain
             int cellCount = 0;
             for (int i = 0; i < cellsToCreate.Count; i++)
             {
-                var (cell, gridX, gridY, isInterior, cellName) = cellsToCreate[i];
+                var (cellEntry, cellRecord) = cellsToCreate[i];
 
                 // Create cell name
                 string finalCellName;
-                if (!string.IsNullOrEmpty(cellName))
+                if (!string.IsNullOrEmpty(cellEntry.CellName))
                 {
-                    finalCellName = $"{cellName} ({gridX}, {gridY})";
+                    finalCellName = $"{cellEntry.CellName} ({cellEntry.GridX}, {cellEntry.GridY})";
                 }
                 else
                 {
-                    finalCellName = isInterior ? $"Interior ({gridX}, {gridY})" : $"Cell ({gridX}, {gridY})";
+                    finalCellName = cellEntry.IsInterior ? $"Interior ({cellEntry.GridX}, {cellEntry.GridY})" : $"Cell ({cellEntry.GridX}, {cellEntry.GridY})";
                 }
 
                 // Create cell GameObject
-                GameObject cellObj = CreateCell(finalCellName, gridX, gridY, isInterior, cell);
+                GameObject cellObj = CreateCell(finalCellName, cellEntry.GridX, cellEntry.GridY, cellEntry.IsInterior, cellRecord);
                 if (cellObj != null)
                 {
                     // Store cell by a unique key (grid coordinates)
-                    string cellKey = $"{gridX}_{gridY}";
+                    string cellKey = cellEntry.GetKey();
                     if (!_cells.ContainsKey(cellKey))
                     {
                         _cells[cellKey] = cellObj;
-                        _cellRecords[cellKey] = cell;
+                        _cellRecords[cellKey] = cellRecord;
                         cellCount++;
                     }
                 }
@@ -169,7 +143,7 @@ namespace ESMSharp.TES3Terrain
         /// <summary>
         /// Creates cell GameObjects from CELL records (legacy synchronous method)
         /// </summary>
-        public void CreateCells(Record[] records, Transform parent = null, string esm = "", string bsa = "")
+        public static void CreateCells(Record[] records, Transform parent = null, string esm = "", string bsa = "")
         {
             _allRecords = records;
             _esm = esm;
@@ -181,8 +155,9 @@ namespace ESMSharp.TES3Terrain
 
         /// <summary>
         /// Synchronous cell creation (internal method for backwards compatibility)
+        /// Uses pre-registered cells from TESCelLibrary for faster lookups
         /// </summary>
-        private void CreateCellsSync(Record[] records, Transform parent = null)
+        private static void CreateCellsSync(Record[] records, Transform parent = null)
         {
             // First, build a set of all cell coordinates that have LAND records
             // This ensures we only create cells where there's actual terrain data
@@ -217,69 +192,37 @@ namespace ESMSharp.TES3Terrain
             
             int cellCount = 0;
 
-            foreach (Record rec in records)
+            // Use TESCelLibrary to get all cells (much faster than iterating through records)
+            foreach (var cellEntry in TESCelLibrary.GetAllCells())
             {
-                RecordCell cell = rec as RecordCell;
-                if (cell == null)
-                    continue;
-
-                if (cell.subRecords == null)
-                    continue;
-
-                // Extract cell data
-                string cellName = null;
-                int gridX = 0;
-                int gridY = 0;
-                bool isInterior = false;
-
-                foreach (SubRecords subrec in cell.subRecords)
-                {
-                    if (subrec == null)
-                        continue;
-
-                    if (subrec is SubRecordCellRGNN)
-                    {
-                        SubRecordCellRGNN rgnn = subrec as SubRecordCellRGNN;
-                        cellName = rgnn.name;
-                    }
-                    else if (subrec is SubRecordCellDATA)
-                    {
-                        SubRecordCellDATA data = subrec as SubRecordCellDATA;
-                        gridX = data.gridX;
-                        gridY = data.gridY;
-                        // Check if interior (flag 0x01)
-                        isInterior = (data.flags & 0x01) != 0;
-                    }
-                }
-
                 // Only create cells that have a matching LAND record (exterior cells only)
                 // This ensures cells match exactly with the heightmap
-                if (!isInterior && !landCellCoordinates.Contains((gridX, gridY)))
+                if (!cellEntry.IsInterior && !landCellCoordinates.Contains((cellEntry.GridX, cellEntry.GridY)))
                 {
                     continue; // Skip cells without LAND records
                 }
 
                 // Create cell name
                 string finalCellName;
-                if (!string.IsNullOrEmpty(cellName))
+                if (!string.IsNullOrEmpty(cellEntry.CellName))
                 {
-                    finalCellName = $"{cellName} ({gridX}, {gridY})";
+                    finalCellName = $"{cellEntry.CellName} ({cellEntry.GridX}, {cellEntry.GridY})";
                 }
                 else
                 {
-                    finalCellName = isInterior ? $"Interior ({gridX}, {gridY})" : $"Cell ({gridX}, {gridY})";
+                    finalCellName = cellEntry.IsInterior ? $"Interior ({cellEntry.GridX}, {cellEntry.GridY})" : $"Cell ({cellEntry.GridX}, {cellEntry.GridY})";
                 }
 
                 // Create cell GameObject
-                GameObject cellObj = CreateCell(finalCellName, gridX, gridY, isInterior, cell);
+                GameObject cellObj = CreateCell(finalCellName, cellEntry.GridX, cellEntry.GridY, cellEntry.IsInterior, cellEntry.CellRecord);
                 if (cellObj != null)
                 {
                     // Store cell by a unique key (grid coordinates)
-                    string cellKey = $"{gridX}_{gridY}";
+                    string cellKey = cellEntry.GetKey();
                     if (!_cells.ContainsKey(cellKey))
                     {
                         _cells[cellKey] = cellObj;
-                        _cellRecords[cellKey] = cell;
+                        _cellRecords[cellKey] = cellEntry.CellRecord;
                         cellCount++;
                     }
                 }
@@ -291,7 +234,7 @@ namespace ESMSharp.TES3Terrain
         /// <summary>
         /// Gets the VHGT height offset for a given cell from the Land records
         /// </summary>
-        private float GetCellVHGTHeight(int cellGridX, int cellGridY, Record[] allRecords)
+        private static float GetCellVHGTHeight(int cellGridX, int cellGridY, Record[] allRecords)
         {
             // Look for RecordLand with matching cell coordinates
             foreach (Record rec in allRecords)
@@ -334,7 +277,7 @@ namespace ESMSharp.TES3Terrain
         /// <summary>
         /// Creates a single cell GameObject with collider
         /// </summary>
-        private GameObject CreateCell(string cellName, int gridX, int gridY, bool isInterior, RecordCell cellRecord)
+        private static GameObject CreateCell(string cellName, int gridX, int gridY, bool isInterior, RecordCell cellRecord)
         {
             GameObject cellObj = new GameObject(cellName);
             
@@ -353,7 +296,7 @@ namespace ESMSharp.TES3Terrain
 
             // Add TESCell component for static generation
             TESCell tesCell = cellObj.AddComponent<TESCell>();
-            tesCell.SetCell(cellRecord, this, _allRecords, _esm, _bsa, vhgtHeight);
+            tesCell.SetCell(cellRecord, _allRecords, _esm, _bsa, vhgtHeight);
 
             // Add box collider (64x64 units per cell in Morrowind game world)
             BoxCollider collider = cellObj.AddComponent<BoxCollider>();
@@ -377,7 +320,7 @@ namespace ESMSharp.TES3Terrain
         /// <summary>
         /// Gets a cell GameObject by grid coordinates
         /// </summary>
-        public GameObject GetCell(int gridX, int gridY)
+        public static GameObject GetCell(int gridX, int gridY)
         {
             string cellKey = $"{gridX}_{gridY}";
             if (_cells.ContainsKey(cellKey))
@@ -390,7 +333,7 @@ namespace ESMSharp.TES3Terrain
         /// <summary>
         /// Gets all cell GameObjects
         /// </summary>
-        public Dictionary<string, GameObject> GetAllCells()
+        public static Dictionary<string, GameObject> GetAllCells()
         {
             return _cells;
         }
@@ -398,7 +341,7 @@ namespace ESMSharp.TES3Terrain
         /// <summary>
         /// Gets all records (for STAT lookup)
         /// </summary>
-        public Record[] GetAllRecords()
+        public static Record[] GetAllRecords()
         {
             return _allRecords;
         }
@@ -406,7 +349,7 @@ namespace ESMSharp.TES3Terrain
         /// <summary>
         /// Gets ESM filename
         /// </summary>
-        public string GetESM()
+        public static string GetESM()
         {
             return _esm;
         }
@@ -414,9 +357,22 @@ namespace ESMSharp.TES3Terrain
         /// <summary>
         /// Gets BSA filename
         /// </summary>
-        public string GetBSA()
+        public static string GetBSA()
         {
             return _bsa;
+        }
+        
+        /// <summary>
+        /// Clears all cells from the manager
+        /// </summary>
+        public static void Clear()
+        {
+            _cells.Clear();
+            _cellRecords.Clear();
+            _parent = null;
+            _allRecords = null;
+            _esm = "";
+            _bsa = "";
         }
     }
 

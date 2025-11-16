@@ -30,6 +30,13 @@ namespace ESMSharp.TES3
         [Range(0.1f, 5f)]
         public float cellCheckInterval = 1f;
         
+        [Tooltip("Whether to actually destroy cell contents when unloading (frees memory but requires reloading)")]
+        public bool destroyCellContentsOnUnload = true;
+        
+        [Header("UI")]
+        [Tooltip("TESUI component for splash screen and progress bar")]
+        public TESUI tesUI = null;
+        
         [Header("Status")]
         [SerializeField] private bool _isInitialized = false;
         [SerializeField] private bool _isGenerating = false;
@@ -37,7 +44,7 @@ namespace ESMSharp.TES3
         
         // References
         private TES3Master _tes3Master = null;
-        private CellManager _cellManager = null;
+        // CellManager is now static, no need for instance reference
         private GameObject _playerObject = null;
         private List<GameObject> _playerObjects = new List<GameObject>(); // Store references to player objects before disabling
         private HashSet<string> _loadedCellKeys = new HashSet<string>();
@@ -77,6 +84,30 @@ namespace ESMSharp.TES3
             _isGenerating = true;
             Debug.Log("TESGame: Starting initialization...");
             
+            // Try to find TESUI if not assigned
+            if (tesUI == null)
+            {
+                tesUI = FindFirstObjectByType<TESUI>();
+                if (tesUI != null)
+                {
+                    Debug.Log("TESGame: Found TESUI component automatically");
+                }
+                else
+                {
+                    Debug.LogWarning("TESGame: TESUI component not found. Splash screen and progress bar will not work.");
+                }
+            }
+            
+            // Show splash screen if available
+            if (tesUI != null)
+            {
+                Debug.Log("TESGame: Showing splash screen and initializing progress");
+                tesUI.ShowSplash();
+                tesUI.UpdateProgress(0f, "Initializing...");
+                // Force UI update
+                yield return null;
+            }
+            
             // Step 0: Try to find player object early for cell prioritization
             Vector3? priorityPosition = null;
             if (_playerObject == null)
@@ -112,6 +143,11 @@ namespace ESMSharp.TES3
             
             // Step 2: Initialize ESM and BSA libraries
             Debug.Log("TESGame: Initializing ESM/BSA libraries...");
+            if (tesUI != null)
+            {
+                tesUI.UpdateProgress(0.1f, "Loading ESM/BSA files...");
+                yield return null; // Allow UI to update
+            }
 
             _tes3Master = new TES3Master();
 
@@ -124,22 +160,38 @@ namespace ESMSharp.TES3
             {
                 Debug.LogError("TESGame: Failed to initialize ESM/BSA libraries!");
                 _isGenerating = false;
+                if (tesUI != null) tesUI.UpdateProgress(0f, "Failed to load ESM/BSA files!");
                 yield break;
             }
             yield return null; // Yield a frame
             
             // Step 3: Generate heightmaps
             Debug.Log("TESGame: Generating heightmaps...");
+            if (tesUI != null)
+            {
+                tesUI.UpdateProgress(0.3f, "Generating heightmaps...");
+                yield return null; // Allow UI to update
+            }
             _tes3Master.GenerateTerrainMaps_MergedLands();
             yield return null; // Yield a frame
             
             // Step 4: Generate terrain
             Debug.Log("TESGame: Generating terrain...");
+            if (tesUI != null)
+            {
+                tesUI.UpdateProgress(0.5f, "Generating terrain...");
+                yield return null; // Allow UI to update
+            }
             _tes3Master.GenerateTerrain();
             yield return null; // Yield a frame
             
             // Step 5: Generate all cells (prioritize cells near player)
             Debug.Log("TESGame: Generating cells...");
+            if (tesUI != null)
+            {
+                tesUI.UpdateProgress(0.7f, "Generating cells...");
+                yield return null; // Allow UI to update
+            }
             
             // Use captured player position for cell prioritization (or use origin if player not found)
             if (priorityPosition == null)
@@ -151,26 +203,18 @@ namespace ESMSharp.TES3
                 Debug.Log($"TESGame: Prioritizing cells near player at {priorityPosition.Value}");
             }
             
-            // Create CellManager first, then run the coroutine
-            _cellManager = new ESMSharp.TES3Terrain.CellManager();
-            
             // Create cells using coroutine with prioritization (15 cells per frame for smooth loading)
-            yield return _tes3Master.CreateCellsCoroutine(transform, priorityPosition, 15, _cellManager);
-            if (_cellManager == null)
-            {
-                Debug.LogError("TESGame: Failed to create CellManager!");
-                _isGenerating = false;
-                yield break;
-            }
+            // CellManager is now static, so no need to instantiate
+            yield return _tes3Master.CreateCellsCoroutine(transform, priorityPosition, 15);
             yield return null; // Yield a frame
             
             // Step 6: Re-enable player objects
             EnablePlayerObjects();
-            
-            // Step 7: Start dynamic cell loading
-            _isInitialized = true;
-            _isGenerating = false;
-            Debug.Log("TESGame: Initialization complete!");
+            if (tesUI != null)
+            {
+                tesUI.UpdateProgress(0.85f, "Preparing player...");
+                yield return null; // Allow UI to update
+            }
             
             // Wait a frame to ensure player object is active
             yield return null;
@@ -211,11 +255,41 @@ namespace ESMSharp.TES3
                 _currentPlayerCellX = playerCellX;
                 _currentPlayerCellY = playerCellY;
                 Debug.Log($"TESGame: Player at cell ({playerCellX}, {playerCellY}), starting initial cell load...");
+                
+                if (tesUI != null)
+                {
+                    tesUI.UpdateProgress(0.9f, $"Loading cell ({playerCellX}, {playerCellY})...");
+                    yield return null; // Allow UI to update
+                }
                 yield return StartCoroutine(UpdateLoadedCellsCoroutine(playerCellX, playerCellY));
             }
             else
             {
                 Debug.LogWarning("TESGame: Player object not found! Dynamic cell loading will not work until player is found.");
+            }
+            
+            // Step 7: Mark as initialized and hide splash screen
+            _isInitialized = true;
+            _isGenerating = false;
+            Debug.Log("TESGame: Initialization complete!");
+            
+            if (tesUI != null)
+            {
+                Debug.Log("TESGame: Setting progress to 100% and hiding splash screen");
+                tesUI.UpdateProgress(1.0f, "Complete!");
+                // Force UI update
+                yield return null;
+                // Wait a brief moment to show "Complete!" message
+                yield return new WaitForSeconds(0.5f);
+                // Hide splash screen
+                Debug.Log("TESGame: Hiding splash screen");
+                tesUI.HideSplash();
+                // Force UI update after hiding
+                yield return null;
+            }
+            else
+            {
+                Debug.LogWarning("TESGame: tesUI is null, cannot hide splash screen!");
             }
         }
         
@@ -388,10 +462,23 @@ namespace ESMSharp.TES3
             }
             
             // Unload cells that are too far away
+            int unloadCount = 0;
             foreach (string cellKey in cellsToUnload)
             {
                 UnloadCell(cellKey);
-                yield return null; // Yield between unloads
+                unloadCount++;
+                yield return null; // Yield between unloads to prevent frame drops
+            }
+            
+            // Trigger garbage collection after unloading multiple cells (helps free memory)
+            if (unloadCount > 0 && destroyCellContentsOnUnload)
+            {
+                // Only trigger GC if we unloaded a significant number of cells
+                if (unloadCount >= 3)
+                {
+                    System.GC.Collect();
+                    Debug.Log($"TESGame: Unloaded {unloadCount} cells and triggered garbage collection");
+                }
             }
             
             // Priority 1: Load the player's current cell first (or wait if already loading)
@@ -466,12 +553,6 @@ namespace ESMSharp.TES3
             
             try
             {
-                if (_cellManager == null)
-                {
-                    Debug.LogWarning($"TESGame: Cannot load cell {cellKey} - CellManager is null");
-                    yield break;
-                }
-                
                 // Parse cell coordinates from key
                 string[] parts = cellKey.Split('_');
                 if (parts.Length != 2)
@@ -486,8 +567,8 @@ namespace ESMSharp.TES3
                     yield break;
                 }
                 
-                // Get the cell GameObject from CellManager
-                GameObject cellObj = _cellManager.GetCell(cellX, cellY);
+                // Get the cell GameObject from static CellManager
+                GameObject cellObj = ESMSharp.TES3Terrain.CellManager.GetCell(cellX, cellY);
                 if (cellObj == null)
                 {
                     // Cell doesn't exist (might be outside world bounds or interior)
@@ -528,9 +609,8 @@ namespace ESMSharp.TES3
         }
         
         /// <summary>
-        /// Unloads a cell (currently just marks it as unloaded, doesn't destroy it)
+        /// Unloads a cell and optionally destroys its contents to free memory
         /// Also stops any ongoing loading coroutine for this cell
-        /// Future: Could implement actual unloading/destruction of cell statics
         /// </summary>
         private void UnloadCell(string cellKey)
         {
@@ -545,10 +625,51 @@ namespace ESMSharp.TES3
             }
             
             _loadingCellKeys.Remove(cellKey);
+            
+            // Parse cell coordinates to get the cell GameObject
+            string[] parts = cellKey.Split('_');
+            if (parts.Length == 2 && int.TryParse(parts[0], out int cellX) && int.TryParse(parts[1], out int cellY))
+            {
+                GameObject cellObj = ESMSharp.TES3Terrain.CellManager.GetCell(cellX, cellY);
+                if (cellObj != null)
+                {
+                    TESCell tesCell = cellObj.GetComponent<TESCell>();
+                    if (tesCell != null && tesCell.staticsGenerated)
+                    {
+                        if (destroyCellContentsOnUnload)
+                        {
+                            // Destroy all child objects (static objects, lights, etc.)
+                            int childCount = cellObj.transform.childCount;
+                            for (int i = childCount - 1; i >= 0; i--)
+                            {
+                                Transform child = cellObj.transform.GetChild(i);
+                                if (child != null)
+                                {
+                                    // Destroy the GameObject (this will also destroy any components like lights)
+                                    Destroy(child.gameObject);
+                                }
+                            }
+                            
+                            // Reset the staticsGenerated flag so it can be regenerated if needed
+                            tesCell.staticsGenerated = false;
+                            
+                            // Only log if significant number of objects were freed (to reduce spam)
+                            if (childCount > 10)
+                            {
+                                Debug.Log($"TESGame: Unloaded and destroyed contents of cell ({cellX}, {cellY}) - freed {childCount} objects (including lights)");
+                            }
+                        }
+                        else
+                        {
+                            // Just mark as unloaded but keep objects in memory
+                            Debug.Log($"TESGame: Unloaded cell ({cellX}, {cellY}) but kept contents in memory");
+                        }
+                    }
+                }
+            }
+            
             _loadedCellKeys.Remove(cellKey);
             _loadedCellCount = _loadedCellKeys.Count;
-            // Note: We don't destroy the cell GameObject or its statics here
-            // This could be implemented later if memory management is needed
         }
         
         /// <summary>
@@ -566,9 +687,8 @@ namespace ESMSharp.TES3
         /// </summary>
         public GameObject GetCellAt(int cellX, int cellY)
         {
-            if (_cellManager == null)
-                return null;
-            return _cellManager.GetCell(cellX, cellY);
+            // Use static CellManager
+            return ESMSharp.TES3Terrain.CellManager.GetCell(cellX, cellY);
         }
         
         /// <summary>
