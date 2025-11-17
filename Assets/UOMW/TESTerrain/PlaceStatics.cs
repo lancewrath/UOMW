@@ -3518,6 +3518,12 @@ namespace ESMSharp.TES3Terrain
                     if (skeletonModel != null)
                     {
                         headModel.transform.localScale = Vector3.one;
+                        // Body parts are loaded as regular meshes (get mesh coordinate conversion)
+                        // but they're attached to skeleton bones, so we need to apply rotation correction
+                        // to align them with the skeleton's coordinate system
+                        // The skeleton has 90° rotation around Z at root, and body parts need to match
+                        // Apply -90° rotation around X and Z to align with skeleton
+                        headModel.transform.localRotation = Quaternion.Euler(-90f, 0f, -90f);
                     }
                     loadedPartsCount++;
                 }
@@ -3532,6 +3538,12 @@ namespace ESMSharp.TES3Terrain
                     if (skeletonModel != null)
                     {
                         hairModel.transform.localScale = Vector3.one;
+                        // Body parts are loaded as regular meshes (get mesh coordinate conversion)
+                        // but they're attached to skeleton bones, so we need to apply rotation correction
+                        // to align them with the skeleton's coordinate system
+                        // The skeleton has 90° rotation around Z at root, and body parts need to match
+                        // Apply -90° rotation around X and Z to align with skeleton
+                        hairModel.transform.localRotation = Quaternion.Euler(-90f, 0f, -90f);
                     }
                     loadedPartsCount++;
                 }
@@ -4004,6 +4016,12 @@ namespace ESMSharp.TES3Terrain
                         if (skeletonModel != null)
                         {
                             headModel.transform.localScale = Vector3.one;
+                            // Body parts are loaded as regular meshes (get mesh coordinate conversion)
+                            // but they're attached to skeleton bones, so we need to apply rotation correction
+                            // to align them with the skeleton's coordinate system
+                            // The skeleton has 90° rotation around Z at root, and body parts need to match
+                            // Apply -90° rotation around X to counteract the mesh conversion's +90° X rotation
+                            headModel.transform.localRotation = Quaternion.Euler(-90f, 0f, 0f);
                         }
                         loadedPartsCount++;
                     }
@@ -4027,6 +4045,12 @@ namespace ESMSharp.TES3Terrain
                         if (skeletonModel != null)
                         {
                             hairModel.transform.localScale = Vector3.one;
+                            // Body parts are loaded as regular meshes (get mesh coordinate conversion)
+                            // but they're attached to skeleton bones, so we need to apply rotation correction
+                            // to align them with the skeleton's coordinate system
+                            // The skeleton has 90° rotation around Z at root, and body parts need to match
+                            // Apply -90° rotation around X to counteract the mesh conversion's +90° X rotation
+                            hairModel.transform.localRotation = Quaternion.Euler(-90f, 0f, 0f);
                         }
                         loadedPartsCount++;
                     }

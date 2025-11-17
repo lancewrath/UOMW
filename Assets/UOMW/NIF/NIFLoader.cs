@@ -1297,8 +1297,9 @@ namespace ESMSharp.NIF
                 
                 // Create root GameObject for skeleton
                 GameObject skeletonRoot = new GameObject(System.IO.Path.GetFileNameWithoutExtension(filename));
-                // Root stays at identity - coordinate system conversion applied to bones individually
-                skeletonRoot.transform.rotation = Quaternion.identity;
+                // Apply 90° rotation around Z at root level to convert from Morrowind's coordinate system
+                // This is needed because Morrowind uses 3ds Max Biped (right-handed) which saves skeletons differently
+                skeletonRoot.transform.rotation = Quaternion.Euler(0f, 0f, 90f);
                 
                 // Skeleton files are in Morrowind units, same as static objects
                 // Scale will be applied by the caller (PlaceStatics.cs)
@@ -1345,26 +1346,32 @@ namespace ESMSharp.NIF
             Matrix4x4 morrowindRotation = (Matrix4x4)node.Rotation;
             float morrowindScale = node.Scale;
             
-            // Convert Morrowind coordinate system (left-handed, Z-up) to Unity (left-handed, Y-up)
-            // Morrowind: X=East, Y=North, Z=Up
-            // Unity: X=East, Y=Up, Z=South
-            // Conversion: X stays X, Y becomes -Z, Z becomes Y
-            
-            // Convert translation
-            Vector3 unityTranslation = ConvertMorrowindTranslationToUnity(morrowindTranslation);
-            // Apply Y translation flip to match mesh conversion (same as ConvertMorrowindTransformToUnity does)
-            unityTranslation.y = -unityTranslation.y;
-            
-            // Convert rotation (Z-up to Y-up)
-            Quaternion unityRotation = ConvertMorrowindRotationToUnity(morrowindRotation);
-            
-            // Scale is uniform (single float in NIF)
-            // Apply Y scale flip to match mesh conversion (same as ConvertMorrowindTransformToUnity does)
-            Vector3 unityScale = new Vector3(morrowindScale, -morrowindScale, morrowindScale);
-            
             // Check if this is the root node (parentWorldTransform is null)
             // Root node typically has identity transform, but we should still apply it if it has one
             bool isRootNode = !parentWorldTransform.HasValue;
+            
+            // Convert Morrowind coordinate system (left-handed, Z-up) to Unity (left-handed, Y-up)
+            // Morrowind: X=East, Y=North, Z=Up
+            // Unity: X=East, Y=Up, Z=South
+            // Apply the same coordinate conversion to ALL bones (including container nodes like base_anim.NIF
+            // and actual bone nodes like Bip01) to ensure consistent transforms
+            // We'll apply a rotation to the skeleton root container later if needed for final orientation
+            
+            // Convert translation: Invert Y and Z components (X, -Y, -Z)
+            // Morrowind skeletons use 3ds Max Biped format (right-handed), so we need to invert Y and Z
+            // This is different from mesh translation conversion - skeletons need raw coordinates with inversions
+            Vector3 unityTranslation = new Vector3(morrowindTranslation.x, -morrowindTranslation.y, -morrowindTranslation.z);
+            
+            // Convert rotation: Invert X and Y components (keep Z normal)
+            // This corrects the bone rotations from 3ds Max Biped format to Unity's coordinate system
+            Vector3 euler = morrowindRotation.rotation.eulerAngles;
+            euler.x = -euler.x; // Invert X rotation
+            euler.y = -euler.y; // Invert Y rotation
+            // Z rotation stays normal (not inverted)
+            Quaternion unityRotation = Quaternion.Euler(euler);
+            
+            // Scale is uniform (single float in NIF)
+            Vector3 unityScale = new Vector3(morrowindScale, morrowindScale, morrowindScale);
             
             // Always apply the transform - even root nodes should have their transforms applied
             // (though root nodes in skeleton files typically have identity transforms)
@@ -1390,6 +1397,8 @@ namespace ESMSharp.NIF
                     if (childNode != null)
                     {
                         // Recursively create bone hierarchy, passing the world transform
+                        // Note: Child bones will get their own axis correction applied
+                        // (Blender applies inverse to children, but we apply the same correction to all)
                         CreateBoneHierarchy(childNode, boneObj.transform, nodeWorldTransform);
                     }
                     
@@ -1522,19 +1531,14 @@ namespace ESMSharp.NIF
         
         /// <summary>
         /// Converts a rotation matrix from Morrowind's coordinate system to Unity's
-        /// Applies the Z-up to Y-up rotation conversion
-        /// Note: Rotation doesn't need Y flip - the coordinate conversion handles it
+        /// For skeleton bones, we use the rotation directly without inversion
+        /// Need to find proper coordinate system conversion method
         /// </summary>
         private Quaternion ConvertMorrowindRotationToUnity(Matrix4x4 morrowindRotation)
         {
-            // Create coordinate system conversion rotation (-90 degrees around X)
-            Quaternion zUpToYUp = Quaternion.Euler(-90f, 0f, 0f);
-            
-            // Convert Morrowind rotation matrix to quaternion
-            Quaternion morrowindQuat = morrowindRotation.rotation;
-            
-            // Apply conversion: Unity rotation = conversion * Morrowind rotation
-            return zUpToYUp * morrowindQuat;
+            // Convert Morrowind rotation matrix to quaternion directly
+            // No inversion applied - need to find proper conversion method
+            return morrowindRotation.rotation;
         }
         
         /// <summary>
