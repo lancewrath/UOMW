@@ -156,7 +156,7 @@ namespace ESMSharp.TES3
             RebuildMergedRecords();
             
             Debug.Log($"TESESMLibrary: Loaded {loadedCount} ESM file(s) from {dataFolder}");
-            Debug.Log($"TESESMLibrary: Summary - Total lights: {TESLightManager.Count}, Total containers: {TESContainerLibrary.Count}, Total NPCs: {TESCharacterManager.NPCCount}");
+            Debug.Log($"TESESMLibrary: Summary - Total lights: {TESLightManager.Count}, Total containers: {TESContainerLibrary.Count}, Total NPCs: {TESCharacterManager.NPCCount}, Total creatures: {TESCreatureManager.Count}");
             return loadedCount;
         }
         
@@ -399,6 +399,15 @@ namespace ESMSharp.TES3
 
                                 break;
 
+                            case "CREA":
+                                RecordCreature creaturerecord = new RecordCreature();
+                                creaturerecord.Deserialize(reader, name);
+                                mRecord = creaturerecord;
+                                
+                                // Register creature with TESCreatureManager
+                                TESCreatureManager.AddCreature(creaturerecord, esmFilename);
+                                break;
+
                             default:
                                 mRecord = new Record();
                                 mRecord.Deserialize(reader, name);
@@ -436,6 +445,12 @@ namespace ESMSharp.TES3
                 if (lightCount > 0)
                 {
                     Debug.Log($"TESESMLibrary: Registered {lightCount} LIGH record(s) from '{esmFilename}'. Total lights in library: {TESLightManager.Count}");
+                }
+                
+                int creatureCount = entry.RecordsByType.ContainsKey("CREA") ? entry.RecordsByType["CREA"].Count : 0;
+                if (creatureCount > 0)
+                {
+                    Debug.Log($"TESESMLibrary: Registered {creatureCount} CREA record(s) from '{esmFilename}'. Total creatures in library: {TESCreatureManager.Count}");
                 }
                 
                 return true;
